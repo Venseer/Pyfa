@@ -3,6 +3,7 @@
 # Used by:
 # Subsystem: Loki Defensive - Adaptive Shielding
 type = "passive"
+runTime = "early"
 
 
 def handler(fit, module, context):

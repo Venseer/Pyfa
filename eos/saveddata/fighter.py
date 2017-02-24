@@ -24,7 +24,8 @@ from sqlalchemy.orm import validates, reconstructor
 import eos.db
 from eos.effectHandlerHelpers import HandledItem, HandledCharge
 from eos.modifiedAttributeDict import ModifiedAttributeDict, ItemAttrShortcut, ChargeAttrShortcut
-from eos.types import FighterAbility, Slot
+from eos.saveddata.fighterAbility import FighterAbility
+from eos.saveddata.module import Slot
 
 logger = logging.getLogger(__name__)
 
@@ -121,6 +122,10 @@ class Fighter(HandledItem, HandledCharge, ItemAttrShortcut, ChargeAttrShortcut):
         self.amount = int(max(min(i, self.getModifiedItemAttr("fighterSquadronMaxSize")), 0))
 
     @property
+    def fighterSquadronMaxSize(self):
+        return int(self.getModifiedItemAttr("fighterSquadronMaxSize"))
+
+    @property
     def abilities(self):
         return self.__abilities or []
 
@@ -143,10 +148,6 @@ class Fighter(HandledItem, HandledCharge, ItemAttrShortcut, ChargeAttrShortcut):
     @property
     def item(self):
         return self.__item
-
-    @property
-    def charge(self):
-        return self.__charge
 
     @property
     def hasAmmo(self):
@@ -218,10 +219,10 @@ class Fighter(HandledItem, HandledCharge, ItemAttrShortcut, ChargeAttrShortcut):
 
     @validates("ID", "itemID", "chargeID", "amount", "amountActive")
     def validator(self, key, val):
-        map = {"ID": lambda val: isinstance(val, int),
-               "itemID": lambda val: isinstance(val, int),
-               "chargeID": lambda val: isinstance(val, int),
-               "amount": lambda val: isinstance(val, int) and val >= -1,
+        map = {"ID": lambda _val: isinstance(_val, int),
+               "itemID": lambda _val: isinstance(_val, int),
+               "chargeID": lambda _val: isinstance(_val, int),
+               "amount": lambda _val: isinstance(_val, int) and _val >= -1,
                }
 
         if not map[key](val):
@@ -269,8 +270,7 @@ class Fighter(HandledItem, HandledCharge, ItemAttrShortcut, ChargeAttrShortcut):
         for ability in self.abilities:
             if ability.active:
                 effect = ability.effect
-                if effect.runTime == runTime and \
-                effect.activeByDefault and \
+                if effect.runTime == runTime and effect.activeByDefault and \
                         ((projected and effect.isType("projected")) or not projected):
                     if ability.grouped:
                         effect.handler(fit, self, context)

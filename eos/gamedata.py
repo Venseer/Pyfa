@@ -179,7 +179,7 @@ class Effect(EqBase):
 
             t = t if isinstance(t, tuple) or t is None else (t,)
             self.__type = t
-        except (ImportError, AttributeError) as e:
+        except (ImportError, AttributeError):
             self.__handler = effectDummy
             self.__runTime = "normal"
             self.__activeByDefault = True
@@ -243,9 +243,11 @@ class Item(EqBase):
 
         return self.__attributes
 
-    def getAttribute(self, key):
+    def getAttribute(self, key, default=None):
         if key in self.attributes:
             return self.attributes[key].value
+        else:
+            return default
 
     def isType(self, type):
         for effect in self.effects.itervalues():
@@ -444,6 +446,26 @@ class Category(EqBase):
     pass
 
 
+class AlphaClone(EqBase):
+
+    @reconstructor
+    def init(self):
+        self.skillCache = {}
+
+        for x in self.skills:
+            self.skillCache[x.typeID] = x
+
+    def getSkillLevel(self, skill):
+        if skill.item.ID in self.skillCache:
+            return self.skillCache[skill.item.ID].level
+        else:
+            return None
+
+
+class AlphaCloneSkill(EqBase):
+    pass
+
+
 class Group(EqBase):
     pass
 
@@ -453,6 +475,7 @@ class Icon(EqBase):
 
 
 class MarketGroup(EqBase):
+
     def __repr__(self):
         return u"MarketGroup(ID={}, name={}, parent={}) at {}".format(
             self.ID, self.name, getattr(self.parent, "name", None), self.name, hex(id(self))

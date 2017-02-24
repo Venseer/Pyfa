@@ -21,9 +21,17 @@ from sqlalchemy.sql import and_
 
 from eos.db import saveddata_session, sd_lock
 from eos.db.saveddata.fit import projectedFits_table
-from eos.db.saveddata.fleet import squadmembers_table
 from eos.db.util import processEager, processWhere
-from eos.types import *
+from eos.saveddata.price import Price
+from eos.saveddata.user import User
+from eos.saveddata.crestchar import CrestChar
+from eos.saveddata.damagePattern import DamagePattern
+from eos.saveddata.targetResists import TargetResists
+from eos.saveddata.character import Character
+from eos.saveddata.implantSet import ImplantSet
+from eos.saveddata.fit import Fit
+from eos.saveddata.miscData import MiscData
+from eos.saveddata.override import Override
 
 import eos.config
 
@@ -33,7 +41,6 @@ if configVal is True:
 
     itemCache = {}
     queryCache = {}
-
 
     def cachedQuery(type, amount, *keywords):
         itemCache[type] = localItemCache = weakref.WeakValueDictionary()
@@ -61,6 +68,7 @@ if configVal is True:
             def checkAndReturn(*args, **kwargs):
                 useCache = kwargs.pop("useCache", True)
                 cacheKey = []
+                items = None
                 cacheKey.extend(args)
                 for keyword in keywords:
                     cacheKey.append(kwargs.get(keyword))
@@ -93,7 +101,6 @@ if configVal is True:
 
         return deco
 
-
     def removeCachedEntry(type, ID):
         if type not in queryCache:
             return
@@ -122,7 +129,6 @@ else:
             return checkAndReturn
 
         return deco
-
 
     def removeCachedEntry(*args, **kwargs):
         return
@@ -213,51 +219,6 @@ def getFit(lookfor, eager=None):
     return fit
 
 
-@cachedQuery(Fleet, 1, "fleetID")
-def getFleet(fleetID, eager=None):
-    if isinstance(fleetID, int):
-        if eager is None:
-            with sd_lock:
-                fleet = saveddata_session.query(Fleet).get(fleetID)
-        else:
-            eager = processEager(eager)
-            with sd_lock:
-                fleet = saveddata_session.query(Fleet).options(*eager).filter(Fleet.ID == fleetID).first()
-    else:
-        raise TypeError("Need integer as argument")
-    return fleet
-
-
-@cachedQuery(Wing, 1, "wingID")
-def getWing(wingID, eager=None):
-    if isinstance(wingID, int):
-        if eager is None:
-            with sd_lock:
-                wing = saveddata_session.query(Wing).get(wingID)
-        else:
-            eager = processEager(eager)
-            with sd_lock:
-                wing = saveddata_session.query(Wing).options(*eager).filter(Wing.ID == wingID).first()
-    else:
-        raise TypeError("Need integer as argument")
-    return wing
-
-
-@cachedQuery(Squad, 1, "squadID")
-def getSquad(squadID, eager=None):
-    if isinstance(squadID, int):
-        if eager is None:
-            with sd_lock:
-                squad = saveddata_session.query(Squad).get(squadID)
-        else:
-            eager = processEager(eager)
-            with sd_lock:
-                squad = saveddata_session.query(Squad).options(*eager).filter(Fleet.ID == squadID).first()
-    else:
-        raise TypeError("Need integer as argument")
-    return squad
-
-
 def getFitsWithShip(shipID, ownerID=None, where=None, eager=None):
     """
     Get all the fits using a certain ship.
@@ -306,24 +267,31 @@ def countAllFits():
     return count
 
 
-def countFitsWithShip(shipID, ownerID=None, where=None, eager=None):
+def countFitsWithShip(lookfor, ownerID=None, where=None, eager=None):
     """
     Get all the fits using a certain ship.
     If no user is passed, do this for all users.
     """
-    if isinstance(shipID, int):
-        if ownerID is not None and not isinstance(ownerID, int):
-            raise TypeError("OwnerID must be integer")
-        filter = Fit.shipID == shipID
-        if ownerID is not None:
-            filter = and_(filter, Fit.ownerID == ownerID)
+    if ownerID is not None and not isinstance(ownerID, int):
+        raise TypeError("OwnerID must be integer")
 
-        filter = processWhere(filter, where)
-        eager = processEager(eager)
-        with sd_lock:
-            count = saveddata_session.query(Fit).options(*eager).filter(filter).count()
+    if isinstance(lookfor, int):
+        filter = Fit.shipID == lookfor
+    elif isinstance(lookfor, list):
+        if len(lookfor) == 0:
+            return 0
+        filter = Fit.shipID.in_(lookfor)
     else:
-        raise TypeError("ShipID must be integer")
+        raise TypeError("You must supply either an integer or ShipID must be integer")
+
+    if ownerID is not None:
+        filter = and_(filter, Fit.ownerID == ownerID)
+
+    filter = processWhere(filter, where)
+    eager = processEager(eager)
+    with sd_lock:
+        count = saveddata_session.query(Fit).options(*eager).filter(filter).count()
+
     return count
 
 
@@ -333,13 +301,6 @@ def getFitList(eager=None):
         fits = removeInvalid(saveddata_session.query(Fit).options(*eager).all())
 
     return fits
-
-
-def getFleetList(eager=None):
-    eager = processEager(eager)
-    with sd_lock:
-        fleets = saveddata_session.query(Fleet).options(*eager).all()
-    return fleets
 
 
 @cachedQuery(Price, 1, "typeID")
@@ -464,17 +425,6 @@ def searchFits(nameLike, where=None, eager=None):
         fits = removeInvalid(saveddata_session.query(Fit).options(*eager).filter(filter).all())
 
     return fits
-
-
-def getSquadsIDsWithFitID(fitID):
-    if isinstance(fitID, int):
-        with sd_lock:
-            squads = saveddata_session.query(squadmembers_table.c.squadID).filter(
-                squadmembers_table.c.memberID == fitID).all()
-            squads = tuple(entry[0] for entry in squads)
-            return squads
-    else:
-        raise TypeError("Need integer as argument")
 
 
 def getProjectedFits(fitID):

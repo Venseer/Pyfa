@@ -3,6 +3,7 @@
 # Used by:
 # Subsystem: Legion Defensive - Adaptive Augmenter
 type = "passive"
+runTime = "early"
 
 
 def handler(fit, module, context):
