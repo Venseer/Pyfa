@@ -17,18 +17,18 @@
 # along with eos.  If not, see <http://www.gnu.org/licenses/>.
 # ===============================================================================
 
-import logging
+from logbook import Logger
 
 from sqlalchemy.orm import validates, reconstructor
+from math import floor
 
 import eos.db
 from eos.effectHandlerHelpers import HandledItem, HandledCharge
 from eos.enum import Enum
-from eos.mathUtils import floorFloat
 from eos.modifiedAttributeDict import ModifiedAttributeDict, ItemAttrShortcut, ChargeAttrShortcut
 from eos.saveddata.citadel import Citadel
 
-logger = logging.getLogger(__name__)
+pyfalog = Logger(__name__)
 
 
 class State(Enum):
@@ -94,11 +94,11 @@ class Module(HandledItem, HandledCharge, ItemAttrShortcut, ChargeAttrShortcut):
         if self.itemID:
             self.__item = eos.db.getItem(self.itemID)
             if self.__item is None:
-                logger.error("Item (id: %d) does not exist", self.itemID)
+                pyfalog.error("Item (id: {0}) does not exist", self.itemID)
                 return
 
         if self.isInvalid:
-            logger.error("Item (id: %d) is not a Module", self.itemID)
+            pyfalog.error("Item (id: {0}) is not a Module", self.itemID)
             return
 
         if self.chargeID:
@@ -172,8 +172,8 @@ class Module(HandledItem, HandledCharge, ItemAttrShortcut, ChargeAttrShortcut):
             if chargeVolume is None or containerCapacity is None:
                 charges = 0
             else:
-                charges = floorFloat(float(containerCapacity) / chargeVolume)
-        return charges
+                charges = floor(containerCapacity / chargeVolume)
+        return int(charges)
 
     @property
     def numShots(self):
@@ -200,6 +200,10 @@ class Module(HandledItem, HandledCharge, ItemAttrShortcut, ChargeAttrShortcut):
             return self.owner.modules.index(self)
 
     @property
+    def isCapitalSize(self):
+        return self.getModifiedItemAttr("volume", 0) >= 4000
+
+    @property
     def hpBeforeReload(self):
         """
         If item is some kind of repairer with charges, calculate
@@ -216,9 +220,10 @@ class Module(HandledItem, HandledCharge, ItemAttrShortcut, ChargeAttrShortcut):
     def __calculateAmmoShots(self):
         if self.charge is not None:
             # Set number of cycles before reload is needed
+            # numcycles = math.floor(module_capacity / (module_volume * module_chargerate))
             chargeRate = self.getModifiedItemAttr("chargeRate")
             numCharges = self.numCharges
-            numShots = floorFloat(float(numCharges) / chargeRate)
+            numShots = floor(numCharges / chargeRate)
         else:
             numShots = None
         return numShots
@@ -231,7 +236,7 @@ class Module(HandledItem, HandledCharge, ItemAttrShortcut, ChargeAttrShortcut):
                 chance = self.getModifiedChargeAttr("crystalVolatilityChance")
                 damage = self.getModifiedChargeAttr("crystalVolatilityDamage")
                 crystals = self.numCharges
-                numShots = floorFloat(float(crystals * hp) / (damage * chance))
+                numShots = floor((crystals * hp) / (damage * chance))
             else:
                 # Set 0 (infinite) for permanent crystals like t1 laser crystals
                 numShots = 0
@@ -325,8 +330,8 @@ class Module(HandledItem, HandledCharge, ItemAttrShortcut, ChargeAttrShortcut):
                     func = self.getModifiedItemAttr
 
                 volley = sum(map(
-                    lambda attr: (func("%sDamage" % attr) or 0) * (1 - getattr(targetResists, "%sAmount" % attr, 0)),
-                    self.DAMAGE_TYPES))
+                        lambda attr: (func("%sDamage" % attr) or 0) * (1 - getattr(targetResists, "%sAmount" % attr, 0)),
+                        self.DAMAGE_TYPES))
                 volley *= self.getModifiedItemAttr("damageMultiplier") or 1
                 if volley:
                     cycleTime = self.cycleTime
@@ -343,7 +348,7 @@ class Module(HandledItem, HandledCharge, ItemAttrShortcut, ChargeAttrShortcut):
             else:
                 if self.state >= State.ACTIVE:
                     volley = self.getModifiedItemAttr("specialtyMiningAmount") or self.getModifiedItemAttr(
-                        "miningAmount") or 0
+                            "miningAmount") or 0
                     if volley:
                         cycleTime = self.cycleTime
                         self.__miningyield = volley / (cycleTime / 1000.0)
@@ -369,7 +374,7 @@ class Module(HandledItem, HandledCharge, ItemAttrShortcut, ChargeAttrShortcut):
         moduleReloadTime = self.getModifiedItemAttr("reloadTime")
         if moduleReloadTime is None:
             moduleReloadTime = self.__reloadTime
-        return moduleReloadTime
+        return moduleReloadTime or 0.0
 
     @reloadTime.setter
     def reloadTime(self, milliseconds):
@@ -384,10 +389,24 @@ class Module(HandledItem, HandledCharge, ItemAttrShortcut, ChargeAttrShortcut):
         self.__reloadForce = type
 
     def fits(self, fit, hardpointLimit=True):
+        """
+        Function that determines if a module can be fit to the ship. We always apply slot restrictions no matter what
+        (too many assumptions made on this), however all other fitting restrictions are optional
+        """
+
         slot = self.slot
         if fit.getSlotsFree(slot) <= (0 if self.owner != fit else -1):
             return False
 
+        fits = self.__fitRestrictions(fit, hardpointLimit)
+
+        if not fits and fit.ignoreRestrictions:
+            self.restrictionOverridden = True
+            fits = True
+
+        return fits
+
+    def __fitRestrictions(self, fit, hardpointLimit=True):
         # Check ship type restrictions
         fitsOnType = set()
         fitsOnGroup = set()
@@ -408,13 +427,19 @@ class Module(HandledItem, HandledCharge, ItemAttrShortcut, ChargeAttrShortcut):
                 if shipGroup is not None:
                     fitsOnGroup.add(shipGroup)
 
-        if (len(fitsOnGroup) > 0 or len(
-                fitsOnType) > 0) and fit.ship.item.group.ID not in fitsOnGroup and fit.ship.item.ID not in fitsOnType:
+        if (len(fitsOnGroup) > 0 or len(fitsOnType) > 0) \
+                and fit.ship.item.group.ID not in fitsOnGroup \
+                and fit.ship.item.ID not in fitsOnType:
             return False
 
         # AFAIK Citadel modules will always be restricted based on canFitShipType/Group. If we are fitting to a Citadel
         # and the module does not have these properties, return false to prevent regular ship modules from being used
         if isinstance(fit.ship, Citadel) and len(fitsOnGroup) == 0 and len(fitsOnType) == 0:
+            return False
+
+        # EVE doesn't let capital modules be fit onto subcapital hulls. Confirmed by CCP Larrikin that this is dictated
+        # by the modules volume. See GH issue #1096
+        if not isinstance(fit.ship, Citadel) and fit.ship.getModifiedItemAttr("isCapitalSize", 0) != 1 and self.isCapitalSize:
             return False
 
         # If the mod is a subsystem, don't let two subs in the same slot fit
@@ -549,8 +574,10 @@ class Module(HandledItem, HandledCharge, ItemAttrShortcut, ChargeAttrShortcut):
 
     @staticmethod
     def __calculateHardpoint(item):
-        effectHardpointMap = {"turretFitted": Hardpoint.TURRET,
-                              "launcherFitted": Hardpoint.MISSILE}
+        effectHardpointMap = {
+            "turretFitted"  : Hardpoint.TURRET,
+            "launcherFitted": Hardpoint.MISSILE
+        }
 
         if item is None:
             return Hardpoint.NONE
@@ -563,12 +590,14 @@ class Module(HandledItem, HandledCharge, ItemAttrShortcut, ChargeAttrShortcut):
 
     @staticmethod
     def __calculateSlot(item):
-        effectSlotMap = {"rigSlot": Slot.RIG,
-                         "loPower": Slot.LOW,
-                         "medPower": Slot.MED,
-                         "hiPower": Slot.HIGH,
-                         "subSystem": Slot.SUBSYSTEM,
-                         "serviceSlot": Slot.SERVICE}
+        effectSlotMap = {
+            "rigSlot"    : Slot.RIG,
+            "loPower"    : Slot.LOW,
+            "medPower"   : Slot.MED,
+            "hiPower"    : Slot.HIGH,
+            "subSystem"  : Slot.SUBSYSTEM,
+            "serviceSlot": Slot.SERVICE
+        }
         if item is None:
             return None
         for effectName, slot in effectSlotMap.iteritems():
@@ -581,9 +610,11 @@ class Module(HandledItem, HandledCharge, ItemAttrShortcut, ChargeAttrShortcut):
 
     @validates("ID", "itemID", "ammoID")
     def validator(self, key, val):
-        map = {"ID": lambda _val: isinstance(_val, int),
-               "itemID": lambda _val: _val is None or isinstance(_val, int),
-               "ammoID": lambda _val: isinstance(_val, int)}
+        map = {
+            "ID"    : lambda _val: isinstance(_val, int),
+            "itemID": lambda _val: _val is None or isinstance(_val, int),
+            "ammoID": lambda _val: isinstance(_val, int)
+        }
 
         if not map[key](val):
             raise ValueError(str(val) + " is not a valid value for " + key)
@@ -627,8 +658,8 @@ class Module(HandledItem, HandledCharge, ItemAttrShortcut, ChargeAttrShortcut):
                     if effect.runTime == runTime and \
                             effect.activeByDefault and \
                             (effect.isType("offline") or
-                                (effect.isType("passive") and self.state >= State.ONLINE) or
-                                (effect.isType("active") and self.state >= State.ACTIVE)) and \
+                                 (effect.isType("passive") and self.state >= State.ONLINE) or
+                                 (effect.isType("active") and self.state >= State.ACTIVE)) and \
                             (not gang or (gang and effect.isType("gang"))):
 
                         chargeContext = ("moduleCharge",)
@@ -665,39 +696,76 @@ class Module(HandledItem, HandledCharge, ItemAttrShortcut, ChargeAttrShortcut):
 
     @property
     def cycleTime(self):
-        reactivation = (self.getModifiedItemAttr("moduleReactivationDelay") or 0)
-        # Reactivation time starts counting after end of module cycle
-        speed = self.rawCycleTime + reactivation
-        if self.charge:
-            reload = self.reloadTime
-        else:
-            reload = 0.0
         # Determine if we'll take into account reload time or not
         factorReload = self.owner.factorReload if self.forceReload is None else self.forceReload
-        # If reactivation is longer than 10 seconds then module can be reloaded
-        # during reactivation time, thus we may ignore reload
-        if factorReload and reactivation < reload:
-            numShots = self.numShots
-            # Time it takes to reload module after end of reactivation time,
-            # given that we started when module cycle has just over
-            additionalReloadTime = (reload - reactivation)
-            # Speed here already takes into consideration reactivation time
-            speed = (speed * numShots + additionalReloadTime) / numShots if numShots > 0 else speed
+
+        numShots = self.numShots
+        speed = self.rawCycleTime
+
+        if factorReload and self.charge:
+            raw_reload_time = self.reloadTime
+        else:
+            raw_reload_time = 0.0
+
+        # Module can only fire one shot at a time, think bomb launchers or defender launchers
+        if self.disallowRepeatingAction:
+            if numShots > 1:
+                """
+                The actual mechanics behind this is complex.  Behavior will be (for 3 ammo):
+                    fire, reactivation delay, fire, reactivation delay, fire, max(reactivation delay, reload)
+                so your effective reload time depends on where you are at in the cycle.
+
+                We can't do that, so instead we'll average it out.
+
+                Currently would apply to bomb launchers and defender missiles
+                """
+                effective_reload_time = ((self.reactivationDelay * (numShots - 1)) + max(raw_reload_time, self.reactivationDelay, 0)) / numShots
+            else:
+                """
+                Applies to MJD/MJFG
+                """
+                effective_reload_time = max(raw_reload_time, self.reactivationDelay, 0)
+        else:
+            """
+            Currently no other modules would have a reactivation delay, so for sanities sake don't try and account for it.
+            Okay, technically cloaks do, but they also have 0 cycle time and cap usage so why do you care?
+            """
+            effective_reload_time = raw_reload_time
+
+        if numShots > 0 and self.charge:
+            speed = (speed * numShots + effective_reload_time) / numShots
 
         return speed
 
     @property
     def rawCycleTime(self):
-        speed = self.getModifiedItemAttr("speed") or self.getModifiedItemAttr("duration")
+        speed = max(
+                self.getModifiedItemAttr("speed"),  # Most weapons
+                self.getModifiedItemAttr("duration"),  # Most average modules
+                self.getModifiedItemAttr("durationSensorDampeningBurstProjector"),
+                self.getModifiedItemAttr("durationTargetIlluminationBurstProjector"),
+                self.getModifiedItemAttr("durationECMJammerBurstProjector"),
+                self.getModifiedItemAttr("durationWeaponDisruptionBurstProjector"),
+                0,  # Return 0 if none of the above are valid
+        )
         return speed
+
+    @property
+    def disallowRepeatingAction(self):
+        return self.getModifiedItemAttr("disallowRepeatingAction", 0)
+
+    @property
+    def reactivationDelay(self):
+        return self.getModifiedItemAttr("moduleReactivationDelay", 0)
 
     @property
     def capUse(self):
         capNeed = self.getModifiedItemAttr("capacitorNeed")
         if capNeed and self.state >= State.ACTIVE:
             cycleTime = self.cycleTime
-            capUsed = capNeed / (cycleTime / 1000.0)
-            return capUsed
+            if cycleTime > 0:
+                capUsed = capNeed / (cycleTime / 1000.0)
+                return capUsed
         else:
             return 0
 
@@ -713,8 +781,8 @@ class Module(HandledItem, HandledCharge, ItemAttrShortcut, ChargeAttrShortcut):
 
     def __repr__(self):
         if self.item:
-            return "Module(ID={}, name={}) at {}".format(
-                self.item.ID, self.item.name, hex(id(self))
+            return u"Module(ID={}, name={}) at {}".format(
+                    self.item.ID, self.item.name, hex(id(self))
             )
         else:
             return "EmptyModule() at {}".format(hex(id(self)))

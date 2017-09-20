@@ -19,9 +19,9 @@
 
 # noinspection PyPackageRequirements
 import wx
-import logging
+from logbook import Logger
 
-logger = logging.getLogger(__name__)
+pyfalog = Logger(__name__)
 
 
 class ContextMenu(object):
@@ -121,7 +121,7 @@ class ContextMenu(object):
 
         debug_end = len(cls._ids)
         if debug_end - debug_start:
-            logger.debug("%d new IDs created for this menu" % (debug_end - debug_start))
+            pyfalog.debug("{0} new IDs created for this menu", (debug_end - debug_start))
 
         return rootMenu if empty is False else None
 
@@ -181,7 +181,7 @@ class ContextMenu(object):
 # noinspection PyUnresolvedReferences
 from gui.builtinContextMenus import (  # noqa: E402,F401
     openFit,
-    # moduleGlobalAmmoPicker,
+    moduleGlobalAmmoPicker,
     moduleAmmoPicker,
     itemStats,
     damagePattern,
@@ -199,8 +199,14 @@ from gui.builtinContextMenus import (  # noqa: E402,F401
     tacticalMode,
     targetResists,
     priceClear,
+    priceOptions,
     amount,
+    cargoAmmo,
+    droneStack,
     metaSwap,
     implantSets,
     fighterAbilities,
+    boosterSideEffects,
+    commandFits,
+    tabbedFits
 )

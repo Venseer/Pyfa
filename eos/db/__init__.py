@@ -24,7 +24,12 @@ from sqlalchemy.orm import sessionmaker
 
 import migration
 from eos import config
+from logbook import Logger
 
+pyfalog = Logger(__name__)
+pyfalog.info("Initializing database")
+pyfalog.info("Gamedata connection: {0}", config.gamedata_connectionstring)
+pyfalog.info("Saveddata connection: {0}", config.saveddata_connectionstring)
 
 class ReadOnlyException(Exception):
     pass
@@ -44,9 +49,11 @@ gamedata_session = sessionmaker(bind=gamedata_engine, autoflush=False, expire_on
 # game db because we haven't reached gamedata_meta.create_all()
 try:
     config.gamedata_version = gamedata_session.execute(
-        "SELECT `field_value` FROM `metadata` WHERE `field_name` LIKE 'client_build'"
+            "SELECT `field_value` FROM `metadata` WHERE `field_name` LIKE 'client_build'"
     ).fetchone()[0]
-except:
+except Exception as e:
+    pyfalog.warning("Missing gamedata version.")
+    pyfalog.critical(e)
     config.gamedata_version = None
 
 saveddata_connectionstring = config.saveddata_connectionstring
@@ -63,13 +70,14 @@ else:
     saveddata_meta = None
 
 # Lock controlling any changes introduced to session
-sd_lock = threading.Lock()
+sd_lock = threading.RLock()
 
 # Import all the definitions for all our database stuff
 # noinspection PyPep8
 from eos.db.gamedata import alphaClones, attribute, category, effect, group, icon, item, marketGroup, metaData, metaGroup, queries, traits, unit
 # noinspection PyPep8
-from eos.db.saveddata import booster, cargo, character, crest, damagePattern, databaseRepair, drone, fighter, fit, implant, implantSet, loadDefaultDatabaseValues, miscData, module, override, price, queries, skill, targetResists, user
+from eos.db.saveddata import booster, cargo, character, crest, damagePattern, databaseRepair, drone, fighter, fit, implant, implantSet, loadDefaultDatabaseValues, \
+    miscData, module, override, price, queries, skill, targetResists, user
 
 # Import queries
 # noinspection PyPep8
@@ -80,8 +88,10 @@ from eos.db.saveddata.queries import *
 # If using in memory saveddata, you'll want to reflect it so the data structure is good.
 if config.saveddata_connectionstring == "sqlite:///:memory:":
     saveddata_meta.create_all()
+    pyfalog.info("Running database out of memory.")
 
 
 def rollback():
     with sd_lock:
+        pyfalog.warning("Session rollback triggered.")
         saveddata_session.rollback()

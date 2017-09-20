@@ -19,11 +19,20 @@
 
 
 import time
+import threading
+import Queue
 from xml.dom import minidom
+
+from logbook import Logger
+import wx
 
 from eos import db
 from service.network import Network, TimeoutError
 from service.fit import Fit
+from service.market import Market
+
+pyfalog = Logger(__name__)
+
 
 VALIDITY = 24 * 60 * 60  # Price validity period, 24 hours
 REREQUEST = 4 * 60 * 60  # Re-request delay for failed fetches, 4 hours
@@ -31,6 +40,8 @@ TIMEOUT = 15 * 60  # Network timeout delay for connection issues, 15 minutes
 
 
 class Price(object):
+    instance = None
+
     systemsList = {
         "Jita": 30000142,
         "Amarr": 30002187,
@@ -39,10 +50,17 @@ class Price(object):
         "Hek": 30002053
     }
 
+    def __init__(self):
+        # Start price fetcher
+        self.priceWorkerThread = PriceWorkerThread()
+        self.priceWorkerThread.daemon = True
+        self.priceWorkerThread.start()
+
     @classmethod
-    def invalidPrices(cls, prices):
-        for price in prices:
-            price.time = 0
+    def getInstance(cls):
+        if cls.instance is None:
+            cls.instance = Price()
+        return cls.instance
 
     @classmethod
     def fetchPrices(cls, prices):
@@ -100,6 +118,7 @@ class Price(object):
                 try:
                     percprice = float(sell.getElementsByTagName("percentile").item(0).firstChild.data)
                 except (TypeError, ValueError):
+                    pyfalog.warning("Failed to get price for: {0}", type_)
                     percprice = 0
 
                 # Fill price data
@@ -114,13 +133,16 @@ class Price(object):
         # If getting or processing data returned any errors
         except TimeoutError:
             # Timeout error deserves special treatment
+            pyfalog.warning("Price fetch timout")
             for typeID in priceMap.keys():
                 priceobj = priceMap[typeID]
                 priceobj.time = time.time() + TIMEOUT
                 priceobj.failed = True
+
                 del priceMap[typeID]
         except:
             # all other errors will pass and continue onward to the REREQUEST delay
+            pyfalog.warning("Caught exception in fetchPrices")
             pass
 
         # if we get to this point, then we've got an error. Set to REREQUEST delay
@@ -132,19 +154,95 @@ class Price(object):
     @classmethod
     def fitItemsList(cls, fit):
         # Compose a list of all the data we need & request it
-        typeIDs = [fit.ship.item.ID]
+        fit_items = [fit.ship.item]
 
         for mod in fit.modules:
             if not mod.isEmpty:
-                typeIDs.append(mod.itemID)
+                fit_items.append(mod.item)
 
         for drone in fit.drones:
-            typeIDs.append(drone.itemID)
+            fit_items.append(drone.item)
 
         for fighter in fit.fighters:
-            typeIDs.append(fighter.itemID)
+            fit_items.append(fighter.item)
 
         for cargo in fit.cargo:
-            typeIDs.append(cargo.itemID)
+            fit_items.append(cargo.item)
 
-        return typeIDs
+        for boosters in fit.boosters:
+            fit_items.append(boosters.item)
+
+        for implants in fit.implants:
+            fit_items.append(implants.item)
+
+        return list(set(fit_items))
+
+    def getPriceNow(self, objitem):
+        """Get price for provided typeID"""
+        sMkt = Market.getInstance()
+        item = sMkt.getItem(objitem)
+
+        return item.price.price
+
+    def getPrices(self, objitems, callback, waitforthread=False):
+        """Get prices for multiple typeIDs"""
+        requests = []
+        for objitem in objitems:
+            sMkt = Market.getInstance()
+            item = sMkt.getItem(objitem)
+            requests.append(item.price)
+
+        def cb():
+            try:
+                callback(requests)
+            except Exception as e:
+                pyfalog.critical("Callback failed.")
+                pyfalog.critical(e)
+
+            db.commit()
+
+        if waitforthread:
+            self.priceWorkerThread.setToWait(requests, cb)
+        else:
+            self.priceWorkerThread.trigger(requests, cb)
+
+    def clearPriceCache(self):
+        pyfalog.debug("Clearing Prices")
+        db.clearPrices()
+
+
+class PriceWorkerThread(threading.Thread):
+    def __init__(self):
+        threading.Thread.__init__(self)
+        self.name = "PriceWorker"
+        self.queue = Queue.Queue()
+        self.wait = {}
+        pyfalog.debug("Initialize PriceWorkerThread.")
+
+    def run(self):
+        queue = self.queue
+        while True:
+            # Grab our data
+            callback, requests = queue.get()
+
+            # Grab prices, this is the time-consuming part
+            if len(requests) > 0:
+                Price.fetchPrices(requests)
+
+            wx.CallAfter(callback)
+            queue.task_done()
+
+            # After we fetch prices, go through the list of waiting items and call their callbacks
+            for price in requests:
+                callbacks = self.wait.pop(price.typeID, None)
+                if callbacks:
+                    for callback in callbacks:
+                        wx.CallAfter(callback)
+
+    def trigger(self, prices, callbacks):
+        self.queue.put((callbacks, prices))
+
+    def setToWait(self, itemID, callback):
+        if itemID not in self.wait:
+            self.wait[itemID] = []
+        self.wait[itemID].append(callback)

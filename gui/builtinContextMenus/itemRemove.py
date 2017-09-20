@@ -4,24 +4,31 @@ import gui.mainFrame
 import wx
 import gui.globalEvents as GE
 from service.fit import Fit
+from service.settings import ContextMenuSettings
 
 
 class ItemRemove(ContextMenu):
     def __init__(self):
         self.mainFrame = gui.mainFrame.MainFrame.getInstance()
+        self.settings = ContextMenuSettings.getInstance()
 
     def display(self, srcContext, selection):
+        if not self.settings.get('itemRemove'):
+            return False
+
         return srcContext in ("fittingModule", "fittingCharge",
                               "droneItem", "implantItem",
                               "boosterItem", "projectedModule",
                               "projectedCharge", "cargoItem",
                               "projectedFit", "projectedDrone",
-                              "fighterItem", "projectedFighter")
+                              "fighterItem", "projectedFighter",
+                              "commandFit")
 
     def getText(self, itmContext, selection):
         return "Remove {0}".format(itmContext if itmContext is not None else "Item")
 
     def activate(self, fullContext, selection, i):
+
         srcContext = fullContext[0]
         sFit = Fit.getInstance()
         fitID = self.mainFrame.getActiveFit()
@@ -43,8 +50,10 @@ class ItemRemove(ContextMenu):
             sFit.removeBooster(fitID, fit.boosters.index(selection[0]))
         elif srcContext == "cargoItem":
             sFit.removeCargo(fitID, fit.cargo.index(selection[0]))
-        else:
+        elif srcContext in ("projectedFit", "projectedModule", "projectedDrone", "projectedFighter"):
             sFit.removeProjected(fitID, selection[0])
+        elif srcContext == "commandFit":
+            sFit.removeCommand(fitID, selection[0])
 
         wx.PostEvent(self.mainFrame, GE.FitChanged(fitID=fitID))
 

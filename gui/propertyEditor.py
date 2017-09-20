@@ -1,8 +1,8 @@
 import csv
-import logging
 
 # noinspection PyPackageRequirements
 import wx
+from logbook import Logger
 
 try:
     # noinspection PyPackageRequirements
@@ -17,11 +17,11 @@ from eos.db.gamedata.queries import getItem, getAttributeInfo
 from service.market import Market
 import gui.display as d
 import gui.globalEvents as GE
-import gui.PFSearchBox as SBox
+import gui.builtinMarketBrowser.pfSearchBox as SBox
 from gui.marketBrowser import SearchBox
 from gui.bitmapLoader import BitmapLoader
 
-logger = logging.getLogger(__name__)
+pyfalog = Logger(__name__)
 
 
 class AttributeEditor(wx.Frame):
@@ -270,7 +270,7 @@ class AttributeGrid(wxpg.PropertyGrid):
 
         self.itemView.updateItems()
 
-        logger.debug('%s changed to "%s"' % (p.GetName(), p.GetValueAsString()))
+        pyfalog.debug('{0} changed to "{1}"', p.GetName(), p.GetValueAsString())
 
     def OnPropGridSelect(self, event):
         pass

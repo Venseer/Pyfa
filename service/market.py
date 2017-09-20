@@ -19,7 +19,7 @@
 
 import re
 import threading
-import logging
+from logbook import Logger
 import Queue
 
 # noinspection PyPackageRequirements
@@ -30,18 +30,17 @@ import config
 import eos.db
 from service import conversions
 from service.settings import SettingsProvider
-from service.price import Price
 
 from eos.gamedata import Category as types_Category, Group as types_Group, Item as types_Item, MarketGroup as types_MarketGroup, \
     MetaGroup as types_MetaGroup, MetaType as types_MetaType
-from eos.saveddata.price import Price as types_Price
+
 
 try:
     from collections import OrderedDict
 except ImportError:
     from utils.compat import OrderedDict
 
-logger = logging.getLogger(__name__)
+pyfalog = Logger(__name__)
 
 # Event which tells threads dependent on Market that it's initialized
 mktRdy = threading.Event()
@@ -50,6 +49,7 @@ mktRdy = threading.Event()
 class ShipBrowserWorkerThread(threading.Thread):
     def __init__(self):
         threading.Thread.__init__(self)
+        pyfalog.debug("Initialize ShipBrowserWorkerThread.")
         self.name = "ShipBrowser"
 
     def run(self):
@@ -73,58 +73,22 @@ class ShipBrowserWorkerThread(threading.Thread):
                     cache[id_] = set_
 
                 wx.CallAfter(callback, (id_, set_))
-            except:
-                pass
+            except Exception as e:
+                pyfalog.critical("Callback failed.")
+                pyfalog.critical(e)
             finally:
                 try:
                     queue.task_done()
-                except:
-                    pass
-
-
-class PriceWorkerThread(threading.Thread):
-    def __init__(self):
-        threading.Thread.__init__(self)
-        self.name = "PriceWorker"
-
-    def run(self):
-        self.queue = Queue.Queue()
-        self.wait = {}
-        self.processUpdates()
-
-    def processUpdates(self):
-        queue = self.queue
-        while True:
-            # Grab our data
-            callback, requests = queue.get()
-
-            # Grab prices, this is the time-consuming part
-            if len(requests) > 0:
-                Price.fetchPrices(requests)
-
-            wx.CallAfter(callback)
-            queue.task_done()
-
-            # After we fetch prices, go through the list of waiting items and call their callbacks
-            for price in requests:
-                callbacks = self.wait.pop(price.typeID, None)
-                if callbacks:
-                    for callback in callbacks:
-                        wx.CallAfter(callback)
-
-    def trigger(self, prices, callbacks):
-        self.queue.put((callbacks, prices))
-
-    def setToWait(self, itemID, callback):
-        if itemID not in self.wait:
-            self.wait[itemID] = []
-        self.wait[itemID].append(callback)
+                except Exception as e:
+                    pyfalog.critical("Queue task done failed.")
+                    pyfalog.critical(e)
 
 
 class SearchWorkerThread(threading.Thread):
     def __init__(self):
         threading.Thread.__init__(self)
         self.name = "SearchWorker"
+        pyfalog.debug("Initialize SearchWorkerThread.")
 
     def run(self):
         self.cv = threading.Condition()
@@ -173,18 +137,12 @@ class Market(object):
     instance = None
 
     def __init__(self):
-        self.priceCache = {}
 
         # Init recently used module storage
         serviceMarketRecentlyUsedModules = {"pyfaMarketRecentlyUsedModules": []}
 
         self.serviceMarketRecentlyUsedModules = SettingsProvider.getInstance().getSettings(
                 "pyfaMarketRecentlyUsedModules", serviceMarketRecentlyUsedModules)
-
-        # Start price fetcher
-        self.priceWorkerThread = PriceWorkerThread()
-        self.priceWorkerThread.daemon = True
-        self.priceWorkerThread.start()
 
         # Thread which handles search
         self.searchWorkerThread = SearchWorkerThread()
@@ -222,6 +180,7 @@ class Market(object):
             "Apotheosis"                  : self.les_grp,  # 5th EVE anniversary present
             "Zephyr"                      : self.les_grp,  # 2010 new year gift
             "Primae"                      : self.les_grp,  # Promotion of planetary interaction
+            "Council Diplomatic Shuttle"  : self.les_grp,  # CSM X celebration
             "Freki"                       : self.les_grp,  # AT7 prize
             "Mimir"                       : self.les_grp,  # AT7 prize
             "Utu"                         : self.les_grp,  # AT8 prize
@@ -267,7 +226,6 @@ class Market(object):
             "Guristas Shuttle"                         : False,
             "Mobile Decoy Unit"                        : False,  # Seems to be left over test mod for deployables
             "Tournament Micro Jump Unit"               : False,  # Normally seen only on tournament arenas
-            "Council Diplomatic Shuttle"               : False,  # CSM X celebration
             "Civilian Gatling Railgun"                 : True,
             "Civilian Gatling Pulse Laser"             : True,
             "Civilian Gatling Autocannon"              : True,
@@ -440,7 +398,7 @@ class Market(object):
             else:
                 raise TypeError("Need Item object, integer, float or string as argument")
         except:
-            logger.error("Could not get item: %s", identity)
+            pyfalog.error("Could not get item: {0}", identity)
             raise
 
         return item
@@ -583,7 +541,44 @@ class Market(object):
         parents = set()
         # Set-container for variables
         variations = set()
+        variations_limiter = set()
+
+        # if item belongs to these categories, use their group to find "variations"
+        categories = ['Drone', 'Fighter', 'Implant']
+
         for item in items:
+            if item.category.ID == 20:  # Implants and Boosters
+                implant_remove_list = set()
+                implant_remove_list.add("Low-Grade ")
+                implant_remove_list.add("Low-grade ")
+                implant_remove_list.add("Mid-Grade ")
+                implant_remove_list.add("Mid-grade ")
+                implant_remove_list.add("High-Grade ")
+                implant_remove_list.add("High-grade ")
+                implant_remove_list.add("Limited ")
+                implant_remove_list.add(" - Advanced")
+                implant_remove_list.add(" - Basic")
+                implant_remove_list.add(" - Elite")
+                implant_remove_list.add(" - Improved")
+                implant_remove_list.add(" - Standard")
+                implant_remove_list.add("Copper ")
+                implant_remove_list.add("Gold ")
+                implant_remove_list.add("Silver ")
+                implant_remove_list.add("Advanced ")
+                implant_remove_list.add("Improved ")
+                implant_remove_list.add("Prototype ")
+                implant_remove_list.add("Standard ")
+                implant_remove_list.add("Strong ")
+                implant_remove_list.add("Synth ")
+
+                for implant_prefix in ("-6", "-7", "-8", "-9", "-10"):
+                    for i in range(50):
+                        implant_remove_list.add(implant_prefix + str("%02d" % i))
+
+                for text_to_remove in implant_remove_list:
+                    if text_to_remove in item.name:
+                        variations_limiter.add(item.name.replace(text_to_remove, ""))
+
             # Get parent item
             if alreadyparent is False:
                 parent = self.getParentItemByItem(item)
@@ -601,7 +596,16 @@ class Market(object):
         variations.update(parents)
         # Add all variations of parents to the set
         parentids = tuple(item.ID for item in parents)
-        variations.update(eos.db.getVariations(parentids))
+        groupids = tuple(item.group.ID for item in parents if item.category.name in categories)
+        variations_list = eos.db.getVariations(parentids, groupids)
+
+        if variations_limiter:
+            for limit in variations_limiter:
+                trimmed_variations_list = [variation_item for variation_item in variations_list if limit in variation_item.name]
+            if trimmed_variations_list:
+                variations_list = trimmed_variations_list
+
+        variations.update(variations_list)
         return variations
 
     def getGroupsByCategory(self, cat):
@@ -805,58 +809,6 @@ class Market(object):
         """Filter items by meta lvl"""
         filtered = set(filter(lambda item: self.getMetaGroupIdByItem(item) in metas, items))
         return filtered
-
-    def getPriceNow(self, typeID):
-        """Get price for provided typeID"""
-        price = self.priceCache.get(typeID)
-        if price is None:
-            price = eos.db.getPrice(typeID)
-            if price is None:
-                price = types_Price(typeID)
-                eos.db.add(price)
-
-            self.priceCache[typeID] = price
-
-        return price
-
-    def getPricesNow(self, typeIDs):
-        """Return map of calls to get price against list of typeIDs"""
-        return map(self.getPrice, typeIDs)
-
-    def getPrices(self, typeIDs, callback):
-        """Get prices for multiple typeIDs"""
-        requests = []
-        for typeID in typeIDs:
-            price = self.getPriceNow(typeID)
-            requests.append(price)
-
-        def cb():
-            try:
-                callback(requests)
-            except Exception:
-                pass
-            eos.db.commit()
-
-        self.priceWorkerThread.trigger(requests, cb)
-
-    def waitForPrice(self, item, callback):
-        """
-        Wait for prices to be fetched and callback when finished. This is used with the column prices for modules.
-        Instead of calling them individually, we set them to wait until the entire fit price is called and calculated
-        (see GH #290)
-        """
-
-        def cb():
-            try:
-                callback(item)
-            except:
-                pass
-
-        self.priceWorkerThread.setToWait(item.ID, cb)
-
-    def clearPriceCache(self):
-        self.priceCache.clear()
-        eos.db.clearPrices()
 
     def getSystemWideEffects(self):
         """

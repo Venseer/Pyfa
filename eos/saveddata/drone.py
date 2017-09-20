@@ -17,7 +17,7 @@
 # along with eos.  If not, see <http://www.gnu.org/licenses/>.
 # ===============================================================================
 
-import logging
+from logbook import Logger
 
 from sqlalchemy.orm import validates, reconstructor
 
@@ -25,7 +25,7 @@ import eos.db
 from eos.effectHandlerHelpers import HandledItem, HandledCharge
 from eos.modifiedAttributeDict import ModifiedAttributeDict, ItemAttrShortcut, ChargeAttrShortcut
 
-logger = logging.getLogger(__name__)
+pyfalog = Logger(__name__)
 
 
 class Drone(HandledItem, HandledCharge, ItemAttrShortcut, ChargeAttrShortcut):
@@ -53,11 +53,11 @@ class Drone(HandledItem, HandledCharge, ItemAttrShortcut, ChargeAttrShortcut):
         if self.itemID:
             self.__item = eos.db.getItem(self.itemID)
             if self.__item is None:
-                logger.error("Item (id: %d) does not exist", self.itemID)
+                pyfalog.error("Item (id: {0}) does not exist", self.itemID)
                 return
 
         if self.isInvalid:
-            logger.error("Item (id: %d) is not a Drone", self.itemID)
+            pyfalog.error("Item (id: {0}) is not a Drone", self.itemID)
             return
 
         self.build()
@@ -101,6 +101,10 @@ class Drone(HandledItem, HandledCharge, ItemAttrShortcut, ChargeAttrShortcut):
         return self.__charge
 
     @property
+    def cycleTime(self):
+        return max(self.getModifiedItemAttr("duration"), 0)
+
+    @property
     def dealsDamage(self):
         for attr in ("emDamage", "kineticDamage", "explosiveDamage", "thermalDamage"):
             if attr in self.itemModifiedAttributes or attr in self.chargeModifiedAttributes:
@@ -134,8 +138,8 @@ class Drone(HandledItem, HandledCharge, ItemAttrShortcut, ChargeAttrShortcut):
                 cycleTime = self.getModifiedItemAttr(attr)
 
                 volley = sum(
-                    map(lambda d: (getter("%sDamage" % d) or 0) * (1 - getattr(targetResists, "%sAmount" % d, 0)),
-                        self.DAMAGE_TYPES))
+                        map(lambda d: (getter("%sDamage" % d) or 0) * (1 - getattr(targetResists, "%sAmount" % d, 0)),
+                            self.DAMAGE_TYPES))
                 volley *= self.amountActive
                 volley *= self.getModifiedItemAttr("damageMultiplier") or 1
                 self.__volley = volley
@@ -186,11 +190,13 @@ class Drone(HandledItem, HandledCharge, ItemAttrShortcut, ChargeAttrShortcut):
 
     @validates("ID", "itemID", "chargeID", "amount", "amountActive")
     def validator(self, key, val):
-        map = {"ID": lambda _val: isinstance(_val, int),
-               "itemID": lambda _val: isinstance(_val, int),
-               "chargeID": lambda _val: isinstance(_val, int),
-               "amount": lambda _val: isinstance(_val, int) and _val >= 0,
-               "amountActive": lambda _val: isinstance(_val, int) and self.amount >= _val >= 0}
+        map = {
+            "ID"          : lambda _val: isinstance(_val, int),
+            "itemID"      : lambda _val: isinstance(_val, int),
+            "chargeID"    : lambda _val: isinstance(_val, int),
+            "amount"      : lambda _val: isinstance(_val, int) and _val >= 0,
+            "amountActive": lambda _val: isinstance(_val, int) and self.amount >= _val >= 0
+        }
 
         if not map[key](val):
             raise ValueError(str(val) + " is not a valid value for " + key)
@@ -232,9 +238,9 @@ class Drone(HandledItem, HandledCharge, ItemAttrShortcut, ChargeAttrShortcut):
 
         for effect in self.item.effects.itervalues():
             if effect.runTime == runTime and \
-                effect.activeByDefault and \
+                    effect.activeByDefault and \
                     ((projected is True and effect.isType("projected")) or
-                        projected is False and effect.isType("passive")):
+                                 projected is False and effect.isType("passive")):
                 # See GH issue #765
                 if effect.getattr('grouped'):
                     effect.handler(fit, self, context)

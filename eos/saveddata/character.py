@@ -17,17 +17,19 @@
 # along with eos.  If not, see <http://www.gnu.org/licenses/>.
 # ===============================================================================
 
+import time
 
-import logging
+from logbook import Logger
 from itertools import chain
 
 from sqlalchemy.orm import validates, reconstructor
 
 import eos
 import eos.db
+import eos.config
 from eos.effectHandlerHelpers import HandledItem, HandledImplantBoosterList
 
-logger = logging.getLogger(__name__)
+pyfalog = Logger(__name__)
 
 
 class Character(object):
@@ -35,16 +37,42 @@ class Character(object):
     __itemIDMap = None
     __itemNameMap = None
 
+    def __init__(self, name, defaultLevel=None, initSkills=True):
+        self.savedName = name
+        self.__owner = None
+        self.defaultLevel = defaultLevel
+        self.__skills = []
+        self.__skillIdMap = {}
+        self.dirtySkills = set()
+        self.alphaClone = None
+        self.__secStatus = 0.0
+
+        if initSkills:
+            for item in self.getSkillList():
+                self.addSkill(Skill(self, item.ID, self.defaultLevel))
+
+        self.__implants = HandledImplantBoosterList()
+        self.apiKey = None
+
+    @reconstructor
+    def init(self):
+
+        self.__skillIdMap = {}
+        for skill in self.__skills:
+            self.__skillIdMap[skill.itemID] = skill
+        self.dirtySkills = set()
+
+        self.alphaClone = None
+
+        if self.alphaCloneID:
+            self.alphaClone = eos.db.getAlphaClone(self.alphaCloneID)
+
     @classmethod
     def getSkillList(cls):
         if cls.__itemList is None:
             cls.__itemList = eos.db.getItemsByCategory("Skill")
 
         return cls.__itemList
-
-    @classmethod
-    def setSkillList(cls, list):
-        cls.__itemList = list
 
     @classmethod
     def getSkillIDMap(cls):
@@ -91,44 +119,28 @@ class Character(object):
 
         return all0
 
-    def __init__(self, name, defaultLevel=None, initSkills=True):
-        self.savedName = name
-        self.__owner = None
-        self.defaultLevel = defaultLevel
-        self.__skills = []
-        self.__skillIdMap = {}
-        self.dirtySkills = set()
-        self.alphaClone = None
-
-        if initSkills:
-            for item in self.getSkillList():
-                self.addSkill(Skill(item.ID, self.defaultLevel))
-
-        self.__implants = HandledImplantBoosterList()
-        self.apiKey = None
-
-    @reconstructor
-    def init(self):
-
-        self.__skillIdMap = {}
-        for skill in self.__skills:
-            self.__skillIdMap[skill.itemID] = skill
-        self.dirtySkills = set()
-
-        self.alphaClone = None
-
-        if self.alphaCloneID:
-            self.alphaClone = eos.db.getAlphaClone(self.alphaCloneID)
-
-    def apiUpdateCharSheet(self, skills):
+    def apiUpdateCharSheet(self, skills, secStatus=0):
         del self.__skills[:]
         self.__skillIdMap.clear()
         for skillRow in skills:
-            self.addSkill(Skill(skillRow["typeID"], skillRow["level"]))
+            self.addSkill(Skill(self, skillRow["typeID"], skillRow["level"]))
+        self.secStatus = secStatus
 
     @property
     def ro(self):
         return self == self.getAll0() or self == self.getAll5()
+
+    @property
+    def secStatus(self):
+        if self.name == "All 5":
+            self.__secStatus = 5.00
+        elif self.name == "All 0":
+            self.__secStatus = 0.00
+        return self.__secStatus
+
+    @secStatus.setter
+    def secStatus(self, sec):
+        self.__secStatus = sec
 
     @property
     def owner(self):
@@ -178,7 +190,6 @@ class Character(object):
             else:
                 return
 
-        self.__skills.append(skill)
         self.__skillIdMap[skill.itemID] = skill
 
     def removeSkill(self, skill):
@@ -194,7 +205,7 @@ class Character(object):
         skill = self.__skillIdMap.get(item.ID)
 
         if skill is None:
-            skill = Skill(item, self.defaultLevel, False, True)
+            skill = Skill(self, item, self.defaultLevel, False, True)
             self.addSkill(skill)
 
         return skill
@@ -208,7 +219,7 @@ class Character(object):
         return len(self.dirtySkills) > 0
 
     def saveLevels(self):
-        if self == self.getAll5() or self == self.getAll0():
+        if self.ro:
             raise ReadOnlyException("This character is read-only")
 
         for skill in self.dirtySkills.copy():
@@ -247,8 +258,8 @@ class Character(object):
 
     def clear(self):
         c = chain(
-            self.skills,
-            self.implants
+                self.skills,
+                self.implants
         )
         for stuff in c:
             if stuff is not None and stuff != self:
@@ -260,16 +271,18 @@ class Character(object):
         copy.apiID = self.apiID
 
         for skill in self.skills:
-            copy.addSkill(Skill(skill.itemID, skill.level, False, skill.learned))
+            copy.addSkill(Skill(copy, skill.itemID, skill.level, False, skill.learned))
 
         return copy
 
     @validates("ID", "name", "apiKey", "ownerID")
     def validator(self, key, val):
-        map = {"ID": lambda _val: isinstance(_val, int),
-               "name": lambda _val: True,
-               "apiKey": lambda _val: _val is None or (isinstance(_val, basestring) and len(_val) > 0),
-               "ownerID": lambda _val: isinstance(_val, int) or _val is None}
+        map = {
+            "ID"     : lambda _val: isinstance(_val, int),
+            "name"   : lambda _val: True,
+            "apiKey" : lambda _val: _val is None or (isinstance(_val, basestring) and len(_val) > 0),
+            "ownerID": lambda _val: isinstance(_val, int) or _val is None
+        }
 
         if not map[key](val):
             raise ValueError(str(val) + " is not a valid value for " + key)
@@ -278,12 +291,13 @@ class Character(object):
 
     def __repr__(self):
         return "Character(ID={}, name={}) at {}".format(
-            self.ID, self.name, hex(id(self))
+                self.ID, self.name, hex(id(self))
         )
 
 
 class Skill(HandledItem):
-    def __init__(self, item, level=0, ro=False, learned=True):
+    def __init__(self, character, item, level=0, ro=False, learned=True):
+        self.character = character
         self.__item = item if not isinstance(item, int) else None
         self.itemID = item.ID if not isinstance(item, int) else item
         self.__level = level if learned else None
@@ -307,7 +321,7 @@ class Skill(HandledItem):
             self.character.dirtySkills.remove(self)
 
     def revert(self):
-        self.level = self.__level
+        self.activeLevel = self.__level
 
     @property
     def isDirty(self):
@@ -319,13 +333,21 @@ class Skill(HandledItem):
 
     @property
     def level(self):
-        if self.character.alphaClone:
-            return min(self.activeLevel, self.character.alphaClone.getSkillLevel(self)) or 0
+        # @todo: there is a phantom bug that keep popping up about skills not having a character... See #1234
+        # Remove this at some point when the cause can be determined.
+        if self.character:
+            # Ensure that All 5/0 character have proper skill levels (in case database gets corrupted)
+            if self.character.name == "All 5":
+                self.activeLevel = self.__level = 5
+            elif self.character.name == "All 0":
+                self.activeLevel = self.__level = 0
+            elif self.character.alphaClone:
+                return min(self.activeLevel, self.character.alphaClone.getSkillLevel(self)) or 0
 
         return self.activeLevel or 0
 
-    @level.setter
-    def level(self, level):
+    def setLevel(self, level, persist=False, ignoreRestrict=False):
+
         if (level < 0 or level > 5) and level is not None:
             raise ValueError(str(level) + " is not a valid value for level")
 
@@ -333,10 +355,26 @@ class Skill(HandledItem):
             raise ReadOnlyException()
 
         self.activeLevel = level
-        self.character.dirtySkills.add(self)
 
-        if self.activeLevel == self.__level and self in self.character.dirtySkills:
-            self.character.dirtySkills.remove(self)
+        # todo: have a way to do bulk skill level editing. Currently, everytime a single skill is changed, this runs,
+        # which affects performance. Should have a checkSkillLevels() or something that is more efficient for bulk.
+        if not ignoreRestrict and eos.config.settings['strictSkillLevels']:
+            start = time.time()
+            for item, rlevel in self.item.requiredFor.iteritems():
+                if item.group.category.ID == 16:  # Skill category
+                    if level < rlevel:
+                        skill = self.character.getSkill(item.ID)
+                        # print "Removing skill: {}, Dependant level: {}, Required level: {}".format(skill, level, rlevel)
+                        skill.setLevel(None, persist)
+            pyfalog.debug("Strict Skill levels enabled, time to process {}: {}".format(self.item.ID, time.time() - start))
+
+        if persist:
+            self.saveLevel()
+        else:
+            self.character.dirtySkills.add(self)
+
+            if self.activeLevel == self.__level and self in self.character.dirtySkills:
+                self.character.dirtySkills.remove(self)
 
     @property
     def item(self):
@@ -387,8 +425,10 @@ class Skill(HandledItem):
         if hasattr(self, "_Skill__ro") and self.__ro is True and key != "characterID":
             raise ReadOnlyException()
 
-        map = {"characterID": lambda _val: isinstance(_val, int),
-               "skillID": lambda _val: isinstance(_val, int)}
+        map = {
+            "characterID": lambda _val: isinstance(_val, int),
+            "skillID"    : lambda _val: isinstance(_val, int)
+        }
 
         if not map[key](val):
             raise ValueError(str(val) + " is not a valid value for " + key)
@@ -396,12 +436,12 @@ class Skill(HandledItem):
             return val
 
     def __deepcopy__(self, memo):
-        copy = Skill(self.item, self.level, self.__ro)
+        copy = Skill(self.character, self.item, self.level, self.__ro)
         return copy
 
     def __repr__(self):
         return "Skill(ID={}, name={}) at {}".format(
-            self.item.ID, self.item.name, hex(id(self))
+                self.item.ID, self.item.name, hex(id(self))
         )
 
 

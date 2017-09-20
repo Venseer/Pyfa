@@ -21,13 +21,18 @@ from math import log, sin, radians, exp
 
 from eos.graph import Graph
 from eos.saveddata.module import State, Hardpoint
+from logbook import Logger
+
+pyfalog = Logger(__name__)
 
 
 class FitDpsGraph(Graph):
-    defaults = {"angle": 0,
-                "distance": 0,
-                "signatureRadius": None,
-                "velocity": 0}
+    defaults = {
+        "angle"          : 0,
+        "distance"       : 0,
+        "signatureRadius": None,
+        "velocity"       : 0
+    }
 
     def __init__(self, fit, data=None):
         Graph.__init__(self, fit, self.calcDps, data if data is not None else self.defaults)
@@ -42,18 +47,18 @@ class FitDpsGraph(Graph):
 
         for mod in fit.modules:
             if not mod.isEmpty and mod.state >= State.ACTIVE:
-                if "remoteTargetPaintFalloff" in mod.item.effects:
+                if "remoteTargetPaintFalloff" in mod.item.effects or "structureModuleEffectTargetPainter" in mod.item.effects:
                     ew['signatureRadius'].append(
-                        1 + (mod.getModifiedItemAttr("signatureRadiusBonus") / 100) * self.calculateModuleMultiplier(
-                            mod, data))
-                if "remoteWebifierFalloff" in mod.item.effects:
+                            1 + (mod.getModifiedItemAttr("signatureRadiusBonus") / 100) * self.calculateModuleMultiplier(
+                                    mod, data))
+                if "remoteWebifierFalloff" in mod.item.effects or "structureModuleEffectStasisWebifier" in mod.item.effects:
                     if distance <= mod.getModifiedItemAttr("maxRange"):
                         ew['velocity'].append(1 + (mod.getModifiedItemAttr("speedFactor") / 100))
                     elif mod.getModifiedItemAttr("falloffEffectiveness") > 0:
                         # I am affected by falloff
                         ew['velocity'].append(
-                            1 + (mod.getModifiedItemAttr("speedFactor") / 100) * self.calculateModuleMultiplier(mod,
-                                                                                                                data))
+                                1 + (mod.getModifiedItemAttr("speedFactor") / 100) * self.calculateModuleMultiplier(mod,
+                                                                                                                    data))
 
         ew['signatureRadius'].sort(key=abssort)
         ew['velocity'].sort(key=abssort)
@@ -65,8 +70,9 @@ class FitDpsGraph(Graph):
                     bonus = values[i]
                     val *= 1 + (bonus - 1) * exp(- i ** 2 / 7.1289)
                 data[attr] = val
-            except:
-                pass
+            except Exception as e:
+                pyfalog.critical("Caught exception in calcDPS.")
+                pyfalog.critical(e)
 
         for mod in fit.modules:
             dps, _ = mod.damageStats(fit.targetResists)
@@ -81,7 +87,7 @@ class FitDpsGraph(Graph):
         if distance <= fit.extraAttributes["droneControlRange"]:
             for drone in fit.drones:
                 multiplier = 1 if drone.getModifiedItemAttr("maxVelocity") > 1 else self.calculateTurretMultiplier(
-                    drone, data)
+                        drone, data)
                 dps, _ = drone.damageStats(fit.targetResists)
                 total += dps * multiplier
 
@@ -145,7 +151,7 @@ class FitDpsGraph(Graph):
         damageReductionSensitivity = ability.fighter.getModifiedItemAttr("{}ReductionSensitivity".format(prefix))
         if damageReductionSensitivity is None:
             damageReductionSensitivity = ability.fighter.getModifiedItemAttr(
-                "{}DamageReductionSensitivity".format(prefix))
+                    "{}DamageReductionSensitivity".format(prefix))
 
         targetSigRad = explosionRadius if targetSigRad is None else targetSigRad
         sigRadiusFactor = targetSigRad / explosionRadius

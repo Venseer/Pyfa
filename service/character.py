@@ -17,10 +17,12 @@
 # along with pyfa.  If not, see <http://www.gnu.org/licenses/>.
 # =============================================================================
 
+import sys
 import copy
 import itertools
 import json
-import logging
+
+from logbook import Logger
 import threading
 from codecs import open
 from xml.etree import ElementTree
@@ -39,7 +41,7 @@ from eos.saveddata.character import Character as es_Character
 from eos.saveddata.module import Slot as es_Slot, Module as es_Module
 from eos.saveddata.fighter import Fighter as es_Fighter
 
-logger = logging.getLogger(__name__)
+pyfalog = Logger(__name__)
 
 
 class CharacterImportThread(threading.Thread):
@@ -72,9 +74,10 @@ class CharacterImportThread(threading.Thread):
                     charFile = open(path, mode='r').read()
                     doc = minidom.parseString(charFile)
                     if doc.documentElement.tagName not in ("SerializableCCPCharacter", "SerializableUriCharacter"):
-                        logger.error("Incorrect EVEMon XML sheet")
+                        pyfalog.error("Incorrect EVEMon XML sheet")
                         raise RuntimeError("Incorrect EVEMon XML sheet")
                     name = doc.getElementsByTagName("name")[0].firstChild.nodeValue
+                    securitystatus = doc.getElementsByTagName("securityStatus")[0].firstChild.nodeValue or 0
                     skill_els = doc.getElementsByTagName("skill")
                     skills = []
                     for skill in skill_els:
@@ -84,16 +87,17 @@ class CharacterImportThread(threading.Thread):
                                 "level": int(skill.getAttribute("level")),
                             })
                         else:
-                            logger.error("Attempted to import unknown skill %s (ID: %s) (Level: %s)",
-                                         skill.getAttribute("name"),
-                                         skill.getAttribute("typeID"),
-                                         skill.getAttribute("level"),
-                                         )
+                            pyfalog.error(
+                                    "Attempted to import unknown skill {0} (ID: {1}) (Level: {2})",
+                                    skill.getAttribute("name"),
+                                    skill.getAttribute("typeID"),
+                                    skill.getAttribute("level"),
+                            )
                     char = sCharacter.new(name + " (EVEMon)")
-                    sCharacter.apiUpdateCharSheet(char.ID, skills)
+                    sCharacter.apiUpdateCharSheet(char.ID, skills, securitystatus)
                 except Exception, e:
-                    logger.error("Exception on character import:")
-                    logger.error(e)
+                    pyfalog.error("Exception on character import:")
+                    pyfalog.error(e)
                     continue
 
         wx.CallAfter(self.callback)
@@ -143,17 +147,20 @@ class Character(object):
         self.all5()
 
     def exportText(self):
-        data = "Pyfa exported plan for \"" + self.skillReqsDict['charname'] + "\"\n"
-        data += "=" * 79 + "\n"
-        data += "\n"
-        item = ""
-        for s in self.skillReqsDict['skills']:
-            if item == "" or not item == s["item"]:
-                item = s["item"]
-                data += "-" * 79 + "\n"
-                data += "Skills required for {}:\n".format(item)
-            data += "{}{}: {}\n".format("    " * s["indent"], s["skill"], int(s["level"]))
-        data += "-" * 79 + "\n"
+        data = u"Pyfa exported plan for \"" + self.skillReqsDict['charname'] + "\"\n"
+        data += u"=" * 79 + u"\n"
+        data += u"\n"
+        item = u""
+        try:
+            for s in self.skillReqsDict['skills']:
+                if item == "" or not item == s["item"]:
+                    item = s["item"]
+                    data += u"-" * 79 + "\n"
+                    data += u"Skills required for {}:\n".format(item)
+                data += u"{}{}: {}\n".format("    " * s["indent"], s["skill"], int(s["level"]))
+            data += u"-" * 79 + "\n"
+        except Exception:
+            pass
 
         return data
 
@@ -193,11 +200,13 @@ class Character(object):
     @staticmethod
     def backupSkills(path, saveFmt, activeFit, callback):
         thread = SkillBackupThread(path, saveFmt, activeFit, callback)
+        pyfalog.debug("Starting backup skills thread.")
         thread.start()
 
     @staticmethod
     def importCharacter(path, callback):
         thread = CharacterImportThread(path, callback)
+        pyfalog.debug("Starting import character thread.")
         thread.start()
 
     @staticmethod
@@ -270,8 +279,22 @@ class Character(object):
         return skills
 
     @staticmethod
+    def getSkillsByName(text):
+        items = eos.db.searchSkills(text)
+        skills = []
+        for skill in items:
+            if skill.published is True:
+                skills.append((skill.ID, skill.name))
+        return skills
+
+    @staticmethod
     def setAlphaClone(char, cloneID):
         char.alphaCloneID = cloneID
+        eos.db.commit()
+
+    @staticmethod
+    def setSecStatus(char, secStatus):
+        char.secStatus = secStatus
         eos.db.commit()
 
     @staticmethod
@@ -285,7 +308,7 @@ class Character(object):
     @staticmethod
     def getSkillLevel(charID, skillID):
         skill = eos.db.getCharacter(charID).getSkill(skillID)
-        return skill.level if skill.learned else "Not learned", skill.isDirty
+        return float(skill.level) if skill.learned else "Not learned", skill.isDirty
 
     @staticmethod
     def getDirtySkills(charID):
@@ -304,7 +327,7 @@ class Character(object):
     @staticmethod
     def rename(char, newName):
         if char.name in ("All 0", "All 5"):
-            logger.info("Cannot rename built in characters.")
+            pyfalog.info("Cannot rename built in characters.")
         else:
             char.name = newName
             eos.db.commit()
@@ -347,44 +370,32 @@ class Character(object):
         char.chars = json.dumps(charList)
         return charList
 
-    @staticmethod
-    def apiFetch(charID, charName):
-        dbChar = eos.db.getCharacter(charID)
-        dbChar.defaultChar = charName
+    def apiFetch(self, charID, charName, callback):
+        thread = UpdateAPIThread(charID, charName, (self.apiFetchCallback, callback))
+        thread.start()
 
-        api = EVEAPIConnection()
-        auth = api.auth(keyID=dbChar.apiID, vCode=dbChar.apiKey)
-        apiResult = auth.account.Characters()
-        charID = None
-        for char in apiResult.characters:
-            if char.name == charName:
-                charID = char.characterID
-
-        if charID is None:
-            return
-
-        sheet = auth.character(charID).CharacterSheet()
-
-        dbChar.apiUpdateCharSheet(sheet.skills)
+    def apiFetchCallback(self, guiCallback, e=None):
         eos.db.commit()
+        wx.CallAfter(guiCallback, e)
 
     @staticmethod
-    def apiUpdateCharSheet(charID, skills):
+    def apiUpdateCharSheet(charID, skills, securitystatus):
         char = eos.db.getCharacter(charID)
-        char.apiUpdateCharSheet(skills)
+        char.apiUpdateCharSheet(skills, securitystatus)
         eos.db.commit()
 
     @staticmethod
-    def changeLevel(charID, skillID, level, persist=False):
+    def changeLevel(charID, skillID, level, persist=False, ifHigher=False):
         char = eos.db.getCharacter(charID)
         skill = char.getSkill(skillID)
-        if isinstance(level, basestring) or level > 5 or level < 0:
-            skill.level = None
-        else:
-            skill.level = level
 
-        if persist:
-            skill.saveLevel()
+        if ifHigher and level < skill.level:
+            return
+
+        if isinstance(level, basestring) or level > 5 or level < 0:
+            skill.setLevel(None, persist)
+        else:
+            skill.setLevel(level, persist)
 
         eos.db.commit()
 
@@ -404,7 +415,7 @@ class Character(object):
     def addImplant(charID, itemID):
         char = eos.db.getCharacter(charID)
         if char.ro:
-            logger.error("Trying to add implant to read-only character")
+            pyfalog.error("Trying to add implant to read-only character")
             return
 
         implant = es_Implant(eos.db.getItem(itemID))
@@ -455,3 +466,38 @@ class Character(object):
                 self._checkRequirements(fit, char, req, subs)
 
         return reqs
+
+
+class UpdateAPIThread(threading.Thread):
+    def __init__(self, charID, charName, callback):
+        threading.Thread.__init__(self)
+
+        self.name = "CheckUpdate"
+        self.callback = callback
+        self.charID = charID
+        self.charName = charName
+
+    def run(self):
+        try:
+            dbChar = eos.db.getCharacter(self.charID)
+            dbChar.defaultChar = self.charName
+
+            api = EVEAPIConnection()
+            auth = api.auth(keyID=dbChar.apiID, vCode=dbChar.apiKey)
+            apiResult = auth.account.Characters()
+            charID = None
+            for char in apiResult.characters:
+                if char.name == self.charName:
+                    charID = char.characterID
+                    break
+
+            if charID is None:
+                return
+
+            sheet = auth.character(charID).CharacterSheet()
+            charInfo = api.eve.CharacterInfo(characterID=charID)
+
+            dbChar.apiUpdateCharSheet(sheet.skills, charInfo.securityStatus)
+            self.callback[0](self.callback[1])
+        except Exception:
+            self.callback[0](self.callback[1], sys.exc_info())

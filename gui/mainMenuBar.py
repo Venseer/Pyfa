@@ -22,9 +22,13 @@ import wx
 
 import config
 from service.character import Character
+from service.fit import Fit
 import gui.graphFrame
 import gui.globalEvents as GE
 from gui.bitmapLoader import BitmapLoader
+
+from logbook import Logger
+pyfalog = Logger(__name__)
 
 if 'wxMac' not in wx.PlatformInfo or ('wxMac' in wx.PlatformInfo and wx.VERSION >= (3, 0)):
     from service.crest import Crest
@@ -33,6 +37,7 @@ if 'wxMac' not in wx.PlatformInfo or ('wxMac' in wx.PlatformInfo and wx.VERSION 
 
 class MainMenuBar(wx.MenuBar):
     def __init__(self, mainFrame):
+        pyfalog.debug("Initialize MainMenuBar")
         self.characterEditorId = wx.NewId()
         self.damagePatternEditorId = wx.NewId()
         self.targetResistsEditorId = wx.NewId()
@@ -53,6 +58,7 @@ class MainMenuBar(wx.MenuBar):
         self.attrEditorId = wx.NewId()
         self.toggleOverridesId = wx.NewId()
         self.importDatabaseDefaultsId = wx.NewId()
+        self.toggleIgnoreRestrictionID = wx.NewId()
 
         if 'wxMac' in wx.PlatformInfo and wx.VERSION >= (3, 0):
             wx.ID_COPY = wx.NewId()
@@ -92,6 +98,8 @@ class MainMenuBar(wx.MenuBar):
         editMenu.Append(self.saveCharId, "Save Character")
         editMenu.Append(self.saveCharAsId, "Save Character As...")
         editMenu.Append(self.revertCharId, "Revert Character")
+        editMenu.AppendSeparator()
+        self.ignoreRestrictionItem = editMenu.Append(self.toggleIgnoreRestrictionID, "Ignore Fitting Restrictions")
 
         # Character menu
         windowMenu = wx.Menu()
@@ -179,5 +187,16 @@ class MainMenuBar(wx.MenuBar):
         self.Enable(self.saveCharId, not char.ro and char.isDirty)
         self.Enable(self.saveCharAsId, char.isDirty)
         self.Enable(self.revertCharId, char.isDirty)
+
+        self.Enable(self.toggleIgnoreRestrictionID, enable)
+
+        if event.fitID:
+            sFit = Fit.getInstance()
+            fit = sFit.getFit(event.fitID)
+
+            if fit.ignoreRestrictions:
+                self.ignoreRestrictionItem.SetItemLabel("Enable Fitting Restrictions")
+            else:
+                self.ignoreRestrictionItem.SetItemLabel("Disable Fitting Restrictions")
 
         event.Skip()

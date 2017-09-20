@@ -22,26 +22,27 @@ import wx
 # noinspection PyPackageRequirements
 import wx.lib.newevent
 import gui.mainFrame
-import gui.marketBrowser
+from gui.builtinMarketBrowser.events import ItemSelected, ITEM_SELECTED
 import gui.display as d
 from gui.contextMenu import ContextMenu
-import gui.shipBrowser
+import gui.builtinShipBrowser.events as sbEvents
 import gui.multiSwitch
 from eos.saveddata.mode import Mode
 from eos.saveddata.module import Module, Slot, Rack
 from gui.builtinViewColumns.state import State
 from gui.bitmapLoader import BitmapLoader
 import gui.builtinViews.emptyView
-from gui.utils.exportHtml import exportHtml
-from logging import getLogger
+from logbook import Logger
 from gui.chromeTabs import EVT_NOTEBOOK_PAGE_CHANGED
 
 from service.fit import Fit
 from service.market import Market
 
+from gui.utils.staticHelpers import DragDropHelper
+
 import gui.globalEvents as GE
 
-logger = getLogger(__name__)
+pyfalog = Logger(__name__)
 
 
 # Tab spawning handler
@@ -49,20 +50,22 @@ class FitSpawner(gui.multiSwitch.TabSpawner):
     def __init__(self, multiSwitch):
         self.multiSwitch = multiSwitch
         self.mainFrame = mainFrame = gui.mainFrame.MainFrame.getInstance()
-        mainFrame.Bind(gui.shipBrowser.EVT_FIT_SELECTED, self.fitSelected)
+        mainFrame.Bind(sbEvents.EVT_FIT_SELECTED, self.fitSelected)
         self.multiSwitch.tabsContainer.handleDrag = self.handleDrag
 
     def fitSelected(self, event):
         count = -1
         for index, page in enumerate(self.multiSwitch.pages):
-            try:
-                if page.activeFitID == event.fitID:
-                    count += 1
-                    self.multiSwitch.SetSelection(index)
-                    wx.PostEvent(self.mainFrame, GE.FitChanged(fitID=event.fitID))
-                    break
-            except:
-                pass
+            if not isinstance(page, gui.builtinViews.emptyView.BlankPage):  # Don't try and process it if it's a blank page.
+                try:
+                    if page.activeFitID == event.fitID:
+                        count += 1
+                        self.multiSwitch.SetSelection(index)
+                        wx.PostEvent(self.mainFrame, GE.FitChanged(fitID=event.fitID))
+                        break
+                except Exception as e:
+                    pyfalog.critical("Caught exception in fitSelected")
+                    pyfalog.critical(e)
         if count < 0:
             startup = getattr(event, "startup", False)  # see OpenFitsThread in gui.mainFrame
             sFit = Fit.getInstance()
@@ -109,7 +112,9 @@ class FittingViewDrop(wx.PyDropTarget):
 
     def OnData(self, x, y, t):
         if self.GetData():
-            data = self.dropData.GetText().split(':')
+            dragged_data = DragDropHelper.data
+            # pyfalog.debug("fittingView: recieved drag: " + self.dropData.GetText())
+            data = dragged_data.split(':')
             self.dropFn(x, y, data)
         return t
 
@@ -133,9 +138,9 @@ class FittingView(d.Display):
         self.Show(False)
         self.parent = parent
         self.mainFrame.Bind(GE.FIT_CHANGED, self.fitChanged)
-        self.mainFrame.Bind(gui.shipBrowser.EVT_FIT_RENAMED, self.fitRenamed)
-        self.mainFrame.Bind(gui.shipBrowser.EVT_FIT_REMOVED, self.fitRemoved)
-        self.mainFrame.Bind(gui.marketBrowser.ITEM_SELECTED, self.appendItem)
+        self.mainFrame.Bind(sbEvents.EVT_FIT_RENAMED, self.fitRenamed)
+        self.mainFrame.Bind(sbEvents.EVT_FIT_REMOVED, self.fitRemoved)
+        self.mainFrame.Bind(ITEM_SELECTED, self.appendItem)
 
         self.Bind(wx.EVT_LEFT_DCLICK, self.removeItem)
         self.Bind(wx.EVT_LIST_BEGIN_DRAG, self.startDrag)
@@ -148,7 +153,6 @@ class FittingView(d.Display):
         self.activeFitID = None
         self.FVsnapshot = None
         self.itemCount = 0
-        self.itemRect = 0
 
         self.hoveredRow = None
         self.hoveredColumn = None
@@ -206,14 +210,14 @@ class FittingView(d.Display):
     def handleDrag(self, type, fitID):
         # Those are drags coming from pyfa sources, NOT builtin wx drags
         if type == "fit":
-            wx.PostEvent(self.mainFrame, gui.shipBrowser.FitSelected(fitID=fitID))
+            wx.PostEvent(self.mainFrame, sbEvents.FitSelected(fitID=fitID))
 
     def Destroy(self):
         self.parent.Unbind(EVT_NOTEBOOK_PAGE_CHANGED, handler=self.pageChanged)
         self.mainFrame.Unbind(GE.FIT_CHANGED, handler=self.fitChanged)
-        self.mainFrame.Unbind(gui.shipBrowser.EVT_FIT_RENAMED, handler=self.fitRenamed)
-        self.mainFrame.Unbind(gui.shipBrowser.EVT_FIT_REMOVED, handler=self.fitRemoved)
-        self.mainFrame.Unbind(gui.marketBrowser.ITEM_SELECTED, handler=self.appendItem)
+        self.mainFrame.Unbind(sbEvents.EVT_FIT_RENAMED, handler=self.fitRenamed)
+        self.mainFrame.Unbind(sbEvents.EVT_FIT_REMOVED, handler=self.fitRemoved)
+        self.mainFrame.Unbind(ITEM_SELECTED, handler=self.appendItem)
 
         d.Display.Destroy(self)
 
@@ -232,12 +236,14 @@ class FittingView(d.Display):
     def startDrag(self, event):
         row = event.GetIndex()
 
-        if row != -1 and row not in self.blanks:
+        if row != -1 and row not in self.blanks and isinstance(self.mods[row], Module) and not self.mods[row].isEmpty:
             data = wx.PyTextDataObject()
-            data.SetText("fitting:" + str(self.mods[row].modPosition))
+            dataStr = "fitting:" + str(self.mods[row].modPosition)
+            data.SetText(dataStr)
 
             dropSource = wx.DropSource(self)
             dropSource.SetData(data)
+            DragDropHelper.data = dataStr
             dropSource.DoDragDrop()
 
     def getSelectedMods(self):
@@ -253,11 +259,16 @@ class FittingView(d.Display):
         keycode = event.GetKeyCode()
         if keycode == wx.WXK_DELETE or keycode == wx.WXK_NUMPAD_DELETE:
             row = self.GetFirstSelected()
+            modules = []
+
             while row != -1:
                 if row not in self.blanks:
-                    self.removeModule(self.mods[row])
+                    mod = self.mods[row]
+                    if isinstance(mod, Module) and not mod.isEmpty:
+                        modules.append(self.mods[row])
                 self.Select(row, 0)
                 row = self.GetNextSelected(row)
+            self.removeModule(modules)
 
         event.Skip()
 
@@ -267,9 +278,9 @@ class FittingView(d.Display):
         We also refresh the fit of the new current page in case
         delete fit caused change in stats (projected)
         """
-        fitID = event.fitID
-
-        if fitID == self.getActiveFit():
+        pyfalog.debug("FittingView::fitRemoved")
+        if event.fitID == self.getActiveFit():
+            pyfalog.debug("    Deleted fit is currently active")
             self.parent.DeletePage(self.parent.GetPageIndex(self))
 
         try:
@@ -278,6 +289,7 @@ class FittingView(d.Display):
             sFit.refreshFit(self.getActiveFit())
             wx.PostEvent(self.mainFrame, GE.FitChanged(fitID=self.activeFitID))
         except wx._core.PyDeadObjectError:
+            pyfalog.warning("Caught dead object")
             pass
 
         event.Skip()
@@ -309,7 +321,7 @@ class FittingView(d.Display):
         fit = sFit.getFit(self.getActiveFit(), basic=True)
 
         bitmap = BitmapLoader.getImage("race_%s_small" % fit.ship.item.race, "gui")
-        text = "%s: %s" % (fit.ship.item.name, fit.name)
+        text = u"%s: %s" % (fit.ship.item.name, fit.name)
 
         pageIndex = self.parent.GetPageIndex(self)
         if pageIndex is not None:
@@ -325,20 +337,25 @@ class FittingView(d.Display):
                     modules = []
                     sel = self.GetFirstSelected()
                     while sel != -1 and sel not in self.blanks:
-                        modules.append(self.mods[self.GetItemData(sel)])
+                        mod = self.mods[self.GetItemData(sel)]
+                        if isinstance(mod, Module) and not mod.isEmpty:
+                            modules.append(self.mods[self.GetItemData(sel)])
                         sel = self.GetNextSelected(sel)
 
-                    sFit.setAmmo(fitID, itemID, modules)
-                    wx.PostEvent(self.mainFrame, GE.FitChanged(fitID=fitID))
+                    if len(modules) > 0:
+                        sFit.setAmmo(fitID, itemID, modules)
+                        wx.PostEvent(self.mainFrame, GE.FitChanged(fitID=fitID))
                 else:
                     populate = sFit.appendModule(fitID, itemID)
                     if populate is not None:
                         self.slotsChanged()
-                        wx.PostEvent(self.mainFrame, GE.FitChanged(fitID=fitID))
+                        wx.PostEvent(self.mainFrame, GE.FitChanged(fitID=fitID, action="modadd", typeID=itemID))
 
         event.Skip()
 
     def removeItem(self, event):
+        if event.CmdDown():
+            return
         row, _ = self.HitTest(event.Position)
         if row != -1 and row not in self.blanks and isinstance(self.mods[row], Module):
             col = self.getColumn(event.Position)
@@ -348,14 +365,20 @@ class FittingView(d.Display):
                 if "wxMSW" in wx.PlatformInfo:
                     self.click(event)
 
-    def removeModule(self, module):
+    def removeModule(self, modules):
+        """Removes a list of modules from the fit"""
         sFit = Fit.getInstance()
-        fit = sFit.getFit(self.activeFitID)
-        populate = sFit.removeModule(self.activeFitID, fit.modules.index(module))
 
-        if populate is not None:
+        if not isinstance(modules, list):
+            modules = [modules]
+
+        positions = [mod.modPosition for mod in modules]
+        result = sFit.removeModule(self.activeFitID, positions)
+
+        if result is not None:
             self.slotsChanged()
-            wx.PostEvent(self.mainFrame, GE.FitChanged(fitID=self.activeFitID))
+            ids = {mod.item.ID for mod in modules}
+            wx.PostEvent(self.mainFrame, GE.FitChanged(fitID=self.activeFitID, action="moddel", typeID=ids))
 
     def addModule(self, x, y, srcIdx):
         """Add a module from the market browser"""
@@ -364,11 +387,16 @@ class FittingView(d.Display):
         if dstRow != -1 and dstRow not in self.blanks:
             sFit = Fit.getInstance()
             fitID = self.mainFrame.getActiveFit()
+            mod = self.mods[dstRow]
+            if not isinstance(mod, Module):  # make sure we're not adding something to a T3D Mode
+                return
+
             moduleChanged = sFit.changeModule(fitID, self.mods[dstRow].modPosition, srcIdx)
             if moduleChanged is None:
                 # the new module doesn't fit in specified slot, try to simply append it
-                wx.PostEvent(self.mainFrame, gui.marketBrowser.ItemSelected(itemID=srcIdx))
-            wx.PostEvent(self.mainFrame, GE.FitChanged(fitID=self.mainFrame.getActiveFit()))
+                wx.PostEvent(self.mainFrame, ItemSelected(itemID=srcIdx))
+
+            wx.PostEvent(self.mainFrame, GE.FitChanged(fitID=self.mainFrame.getActiveFit(), action="modadd", typeID=srcIdx))
 
     def swapCargo(self, x, y, srcIdx):
         """Swap a module from cargo to fitting window"""
@@ -378,11 +406,17 @@ class FittingView(d.Display):
         if dstRow != -1 and dstRow not in self.blanks:
             module = self.mods[dstRow]
 
+            if not isinstance(module, Module):
+                return
+
             sFit = Fit.getInstance()
+            fit = sFit.getFit(self.activeFitID)
+            typeID = fit.cargo[srcIdx].item.ID
+
             sFit.moveCargoToModule(self.mainFrame.getActiveFit(), module.modPosition, srcIdx,
                                    mstate.CmdDown() and module.isEmpty)
 
-            wx.PostEvent(self.mainFrame, GE.FitChanged(fitID=self.mainFrame.getActiveFit()))
+            wx.PostEvent(self.mainFrame, GE.FitChanged(fitID=self.mainFrame.getActiveFit(), action="modadd", typeID=typeID))
 
     def swapItems(self, x, y, srcIdx):
         """Swap two modules in fitting window"""
@@ -402,11 +436,14 @@ class FittingView(d.Display):
             mod1 = fit.modules[srcIdx]
             mod2 = self.mods[dstRow]
 
+            if not isinstance(mod2, Module):
+                return
+
             # can't swap modules to different racks
             if mod1.slot != mod2.slot:
                 return
 
-            if getattr(mod2, "modPosition"):
+            if getattr(mod2, "modPosition") is not None:
                 if clone and mod2.isEmpty:
                     sFit.cloneModule(self.mainFrame.getActiveFit(), srcIdx, mod2.modPosition)
                 else:
@@ -414,7 +451,7 @@ class FittingView(d.Display):
 
                 wx.PostEvent(self.mainFrame, GE.FitChanged(fitID=self.mainFrame.getActiveFit()))
             else:
-                logger.error("Missing module position for: %s", str(getattr(mod2, "ID", "Unknown")))
+                pyfalog.error("Missing module position for: {0}", str(getattr(mod2, "ID", "Unknown")))
 
     def generateMods(self):
         """
@@ -478,12 +515,11 @@ class FittingView(d.Display):
                     # This only happens when turning on/off slot divisions
                     self.populate(self.mods)
                 self.refresh(self.mods)
-
-                exportHtml.getInstance().refreshFittingHtml()
+                self.Refresh()
 
             self.Show(self.activeFitID is not None and self.activeFitID == event.fitID)
         except wx._core.PyDeadObjectError:
-            pass
+            pyfalog.error("Caught dead object")
         finally:
             event.Skip()
 
@@ -609,12 +645,13 @@ class FittingView(d.Display):
             slotMap[slot] = fit.getSlotsFree(slot) < 0
 
         font = (self.GetClassDefaultAttributes()).font
+
         for i, mod in enumerate(self.mods):
             self.SetItemBackgroundColour(i, self.GetBackgroundColour())
 
             #  only consider changing color if we're dealing with a Module
             if type(mod) is Module:
-                if slotMap[mod.slot]:  # Color too many modules as red
+                if slotMap[mod.slot] or getattr(mod, 'restrictionOverridden', None):  # Color too many modules as red
                     self.SetItemBackgroundColour(i, wx.Colour(204, 51, 51))
                 elif sFit.serviceFittingOptions["colorFitBySlot"]:  # Color by slot it enabled
                     self.SetItemBackgroundColour(i, self.slotColour(mod.slot))
@@ -631,20 +668,21 @@ class FittingView(d.Display):
 
         self.Thaw()
         self.itemCount = self.GetItemCount()
-        self.itemRect = self.GetItemRect(0)
 
         if 'wxMac' in wx.PlatformInfo:
             try:
                 self.MakeSnapshot()
-            except:
-                pass
+            except Exception as e:
+                pyfalog.critical("Failed to make snapshot")
+                pyfalog.critical(e)
 
     def OnShow(self, event):
         if event.GetShow():
             try:
                 self.MakeSnapshot()
-            except:
-                pass
+            except Exception as e:
+                pyfalog.critical("Failed to make snapshot")
+                pyfalog.critical(e)
         event.Skip()
 
     def Snapshot(self):
@@ -669,8 +707,9 @@ class FittingView(d.Display):
         sFit = Fit.getInstance()
         try:
             fit = sFit.getFit(self.activeFitID)
-        except:
-            return
+        except Exception as e:
+            pyfalog.critical("Failed to get fit")
+            pyfalog.critical(e)
 
         if fit is None:
             return

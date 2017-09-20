@@ -8,14 +8,20 @@ from eos.saveddata.character import Skill
 import gui.globalEvents as GE
 from service.fit import Fit
 from service.character import Character
+from service.settings import ContextMenuSettings
 
 
 class ChangeAffectingSkills(ContextMenu):
     def __init__(self):
         self.mainFrame = gui.mainFrame.MainFrame.getInstance()
+        self.settings = ContextMenuSettings.getInstance()
 
     def display(self, srcContext, selection):
-        if self.mainFrame.getActiveFit() is None or srcContext not in ("fittingModule", "fittingCharge", "fittingShip"):
+        if not self.settings.get('changeAffectingSkills'):
+            return False
+
+        if self.mainFrame.getActiveFit() is None or srcContext not in (
+                "fittingModule", "fittingCharge", "fittingShip", "droneItem", "fighterItem"):
             return False
 
         self.sChar = Character.getInstance()

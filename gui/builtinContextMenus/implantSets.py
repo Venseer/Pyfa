@@ -6,13 +6,24 @@ import wx
 from service.implantSet import ImplantSets as s_ImplantSets
 from service.character import Character
 from service.fit import Fit
+from service.settings import ContextMenuSettings
 
 
 class ImplantSets(ContextMenu):
     def __init__(self):
         self.mainFrame = gui.mainFrame.MainFrame.getInstance()
+        self.settings = ContextMenuSettings.getInstance()
 
     def display(self, srcContext, selection):
+        if not self.settings.get('implantSets'):
+            return False
+
+        sIS = s_ImplantSets.getInstance()
+        implantSets = sIS.getImplantSetList()
+
+        if len(implantSets) == 0:
+            return False
+
         return srcContext in ("implantView", "implantEditor")
 
     def getText(self, itmContext, selection):
@@ -64,10 +75,10 @@ class ImplantSets(ContextMenu):
         if self.context == "implantEditor":
             # we are calling from character editor, the implant source is different
             sChar = Character.getInstance()
-            charID = self.selection.getActiveCharacter()
+            char = self.selection.entityEditor.getActiveEntity()
 
             for implant in set.implants:
-                sChar.addImplant(charID, implant.item.ID)
+                sChar.addImplant(char.ID, implant.item.ID)
 
             wx.PostEvent(self.selection, GE.CharChanged())
         else:

@@ -20,6 +20,7 @@
 
 # noinspection PyPackageRequirements
 import wx
+from logbook import Logger
 from eos.saveddata.cargo import Cargo
 from eos.saveddata.implant import Implant
 from eos.saveddata.drone import Drone
@@ -29,6 +30,8 @@ from eos.saveddata.fit import Fit
 from service.fit import Fit as FitSvc
 from gui.viewColumn import ViewColumn
 import gui.mainFrame
+
+pyfalog = Logger(__name__)
 
 
 class BaseName(ViewColumn):
@@ -41,7 +44,7 @@ class BaseName(ViewColumn):
         self.columnText = "Name"
         self.shipImage = fittingView.imageList.GetImageIndex("ship_small", "gui")
         self.mask = wx.LIST_MASK_TEXT
-        self.projectedView = isinstance(fittingView, gui.projectedView.ProjectedView)
+        self.projectedView = isinstance(fittingView, gui.builtinAdditionPanes.projectedView.ProjectedView)
 
     def getText(self, stuff):
         if isinstance(stuff, Drone):
@@ -55,7 +58,14 @@ class BaseName(ViewColumn):
             if self.projectedView:
                 # we need a little more information for the projected view
                 fitID = self.mainFrame.getActiveFit()
-                return "%dx %s (%s)" % (stuff.getProjectionInfo(fitID).amount, stuff.name, stuff.ship.item.name)
+                info = stuff.getProjectionInfo(fitID)
+
+                if info:
+                    return "%dx %s (%s)" % (stuff.getProjectionInfo(fitID).amount, stuff.name, stuff.ship.item.name)
+
+                pyfalog.warning("Projected View trying to display things that aren't there. stuff: {}, info: {}", repr(stuff),
+                                info)
+                return "<unknown>"
             else:
                 return "%s (%s)" % (stuff.name, stuff.ship.item.name)
         elif isinstance(stuff, Rack):

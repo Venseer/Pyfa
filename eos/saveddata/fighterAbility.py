@@ -17,11 +17,11 @@
 # along with eos.  If not, see <http://www.gnu.org/licenses/>.
 # ===============================================================================
 
-import logging
+from logbook import Logger
 
 from sqlalchemy.orm import reconstructor
 
-logger = logging.getLogger(__name__)
+pyfalog = Logger(__name__)
 
 
 class FighterAbility(object):
@@ -59,7 +59,7 @@ class FighterAbility(object):
         if self.effectID:
             self.__effect = next((x for x in self.fighter.item.effects.itervalues() if x.ID == self.effectID), None)
             if self.__effect is None:
-                logger.error("Effect (id: %d) does not exist", self.effectID)
+                pyfalog.error("Effect (id: {0}) does not exist", self.effectID)
                 return
 
         self.build()
@@ -132,7 +132,7 @@ class FighterAbility(object):
                 else:
                     volley = sum(map(lambda d2, d:
                                      (self.fighter.getModifiedItemAttr(
-                                         "{}Damage{}".format(self.attrPrefix, d2)) or 0) *
+                                             "{}Damage{}".format(self.attrPrefix, d2)) or 0) *
                                      (1 - getattr(targetResists, "{}Amount".format(d), 0)),
                                      self.DAMAGE_TYPES2, self.DAMAGE_TYPES))
 
