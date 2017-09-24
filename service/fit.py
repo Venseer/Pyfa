@@ -74,6 +74,7 @@ class Fit(object):
             "exportCharges": True,
             "openFitInNew": False,
             "priceSystem": "Jita",
+            "priceSource": "eve-central.com",
             "showShipBrowserTooltip": True,
             "marketSearchDelay": 250
         }
@@ -237,10 +238,12 @@ class Fit(object):
 
         if self.serviceFittingOptions["useGlobalCharacter"]:
             if fit.character != self.character:
+                fit.calculated = False
                 fit.character = self.character
 
         if self.serviceFittingOptions["useGlobalDamagePattern"]:
             if fit.damagePattern != self.pattern:
+                fit.calculated = False
                 fit.damagePattern = self.pattern
 
         eos.db.commit()
