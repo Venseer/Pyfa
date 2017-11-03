@@ -19,7 +19,7 @@ debug = False
 saveInRoot = False
 
 # Version data
-version = "1.33.0"
+version = "1.33.1"
 tag = "Stable"
 expansionName = "Lifeblood"
 expansionVersion = "1.0"
