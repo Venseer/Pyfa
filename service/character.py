@@ -66,7 +66,7 @@ class CharacterImportThread(threading.Thread):
                 with open(path, mode='r') as charFile:
                     sheet = ParseXML(charFile)
                     char = sCharacter.new(sheet.name + " (imported)")
-                    sCharacter.apiUpdateCharSheet(char.ID, sheet.skills)
+                    sCharacter.apiUpdateCharSheet(char.ID, sheet.skills, 0)
             except:
                 # if it's not api XML data, try this
                 # this is a horrible logic flow, but whatever
@@ -77,7 +77,7 @@ class CharacterImportThread(threading.Thread):
                         pyfalog.error("Incorrect EVEMon XML sheet")
                         raise RuntimeError("Incorrect EVEMon XML sheet")
                     name = doc.getElementsByTagName("name")[0].firstChild.nodeValue
-                    securitystatus = doc.getElementsByTagName("securityStatus")[0].firstChild.nodeValue or 0
+                    securitystatus = float(doc.getElementsByTagName("securityStatus")[0].firstChild.nodeValue) or 0.0
                     skill_els = doc.getElementsByTagName("skill")
                     skills = []
                     for skill in skill_els:
@@ -253,6 +253,7 @@ class Character(object):
 
         # revert old char
         char.revertLevels()
+        return newChar.ID
 
     @staticmethod
     def revertCharacter(charID):

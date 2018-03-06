@@ -90,7 +90,7 @@ class Fighter(HandledItem, HandledCharge, ItemAttrShortcut, ChargeAttrShortcut):
             self.__slot = self.__calculateSlot(self.__item)
 
             chargeID = self.getModifiedItemAttr("fighterAbilityLaunchBombType")
-            if chargeID is not None:
+            if chargeID:
                 charge = eos.db.getItem(int(chargeID))
                 self.__charge = charge
                 self.__chargeModifiedAttributes.original = charge.attributes
@@ -104,7 +104,10 @@ class Fighter(HandledItem, HandledCharge, ItemAttrShortcut, ChargeAttrShortcut):
         types = {
             "Light"  : Slot.F_LIGHT,
             "Support": Slot.F_SUPPORT,
-            "Heavy"  : Slot.F_HEAVY
+            "Heavy"  : Slot.F_HEAVY,
+            "StandupLight": Slot.FS_LIGHT,
+            "StandupSupport": Slot.FS_SUPPORT,
+            "StandupHeavy": Slot.FS_HEAVY
         }
 
         for t, slot in types.iteritems():
@@ -271,17 +274,19 @@ class Fighter(HandledItem, HandledCharge, ItemAttrShortcut, ChargeAttrShortcut):
             projected = False
 
         for ability in self.abilities:
-            if ability.active:
-                effect = ability.effect
-                if effect.runTime == runTime and effect.activeByDefault and \
-                        ((projected and effect.isType("projected")) or not projected):
-                    if ability.grouped:
+            if not ability.active:
+                continue
+
+            effect = ability.effect
+            if effect.runTime == runTime and effect.activeByDefault and \
+                    ((projected and effect.isType("projected")) or not projected):
+                if ability.grouped:
+                    effect.handler(fit, self, context)
+                else:
+                    i = 0
+                    while i != self.amountActive:
                         effect.handler(fit, self, context)
-                    else:
-                        i = 0
-                        while i != self.amountActive:
-                            effect.handler(fit, self, context)
-                            i += 1
+                        i += 1
 
     def __deepcopy__(self, memo):
         copy = Fighter(self.item)
