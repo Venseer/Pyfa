@@ -80,15 +80,16 @@ class AttributeDisplay(ViewColumn):
             else:
                 attr = mod.getAttribute(self.info.name)
 
-        if attr is None:
+        if not attr:
             return ""
 
         if self.info.name == "volume":
-            str_ = (formatAmount(attr, 3, 0, 3))
-            if hasattr(mod, "amount"):
-                str_ += "m\u00B3 (%s m\u00B3)" % (formatAmount(attr * mod.amount, 3, 0, 3))
-            attr = str_
-
+            if getattr(mod, "amount", 1) != 1:
+                attr = "{} m\u00B3 ({} m\u00B3)".format(
+                    formatAmount(attr, 3, 0, 6),
+                    formatAmount(attr * mod.amount, 3, 0, 6))
+            else:
+                attr = "{} m\u00B3".format(formatAmount(attr, 3, 0, 6))
         if isinstance(attr, (float, int)):
             attr = (formatAmount(attr, 3, 0, 3))
 

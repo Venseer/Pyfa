@@ -1,50 +1,59 @@
+from abc import ABCMeta, abstractmethod
+
 import wx
 
 import gui.globalEvents as GE
 import gui.mainFrame
-from gui.contextMenu import ContextMenu
-from service.settings import PriceMenuSettings
+from gui.contextMenu import ContextMenuUnconditional
+from service.settings import MarketPriceSettings
+
+_t = wx.GetTranslation
 
 
-class PriceOptions(ContextMenu):
+class ItemGroupPrice(ContextMenuUnconditional, metaclass=ABCMeta):
+
     def __init__(self):
         self.mainFrame = gui.mainFrame.MainFrame.getInstance()
-        self.settings = PriceMenuSettings.getInstance()
-        self.optionList = ["Ship", "Modules", "Drones", "Cargo", "Character"]
+        self.settings = MarketPriceSettings.getInstance()
 
-    def display(self, srcContext, selection):
+    @property
+    @abstractmethod
+    def optionName(self):
+        raise NotImplementedError()
+
+    def display(self, callingWindow, srcContext):
         return srcContext in ("priceViewFull", "priceViewMinimal")
 
-    def getText(self, itmContext, selection):
-        return "Include in total"
+    def activate(self, callingWindow, fullContext, i):
+        self.settings.set(self.optionName, not self.settings.get(self.optionName))
+        fitID = self.mainFrame.getActiveFit()
+        wx.PostEvent(self.mainFrame, GE.FitChanged(fitIDs=(fitID,)))
 
-    def addOption(self, menu, option):
-        label = option
-        id = ContextMenu.nextID()
-        self.optionIds[id] = option
-        menuItem = wx.MenuItem(menu, id, label, kind=wx.ITEM_CHECK)
-        menu.Bind(wx.EVT_MENU, self.handleMode, menuItem)
-        return menuItem
-
-    def getSubMenu(self, context, selection, rootMenu, i, pitem):
-        msw = True if "wxMSW" in wx.PlatformInfo else False
-        self.context = context
-        self.optionIds = {}
-
-        sub = wx.Menu()
-
-        for option in self.optionList:
-            menuItem = self.addOption(rootMenu if msw else sub, option)
-            sub.Append(menuItem)
-            menuItem.Check(self.settings.get(option.lower()))
-
-        return sub
-
-    def handleMode(self, event):
-        option = self.optionIds[event.Id]
-        self.settings.set(option.lower(), event.Int)
-
-        wx.PostEvent(self.mainFrame, GE.FitChanged(fitID=self.mainFrame.getActiveFit()))
+    def isChecked(self, i):
+        return self.settings.get(self.optionName)
 
 
-PriceOptions.register()
+class DronesPrice(ItemGroupPrice):
+    optionName = 'drones'
+
+    def getText(self, callingWindow, itmContext):
+        return _t('Drones')
+
+
+class CargoPrice(ItemGroupPrice):
+    optionName = 'cargo'
+
+    def getText(self, callingWindow, itmContext):
+        return _t('Cargo')
+
+
+class ImplantBoosterPrice(ItemGroupPrice):
+    optionName = 'character'
+
+    def getText(self, callingWindow, itmContext):
+        return _t('Implants && Boosters')
+
+
+DronesPrice.register()
+CargoPrice.register()
+ImplantBoosterPrice.register()

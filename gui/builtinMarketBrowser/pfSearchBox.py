@@ -2,6 +2,7 @@
 import wx
 import gui.utils.color as colorUtils
 import gui.utils.draw as drawUtils
+from gui.utils.helpers_wxPython import HandleCtrlBackspace
 
 SearchButton, EVT_SEARCH_BTN = wx.lib.newevent.NewEvent()
 CancelButton, EVT_CANCEL_BTN = wx.lib.newevent.NewEvent()
@@ -55,7 +56,7 @@ class PFSearchBox(wx.Window):
 
         self.EditBox.Bind(wx.EVT_SET_FOCUS, self.OnEditSetFocus)
         self.EditBox.Bind(wx.EVT_KILL_FOCUS, self.OnEditKillFocus)
-
+        self.EditBox.Bind(wx.EVT_KEY_DOWN, self.OnKeyPress)
         self.EditBox.Bind(wx.EVT_TEXT, self.OnText)
         self.EditBox.Bind(wx.EVT_TEXT_ENTER, self.OnTextEnter)
 
@@ -82,6 +83,12 @@ class PFSearchBox(wx.Window):
         if self.EditBox.GetValue() == "":
             self.Clear()
         event.Skip()
+
+    def OnKeyPress(self, event):
+        if event.RawControlDown() and event.GetKeyCode() == wx.WXK_BACK:
+            HandleCtrlBackspace(self.EditBox)
+        else:
+            event.Skip()
 
     def Clear(self):
         self.EditBox.Clear()
@@ -246,8 +253,8 @@ class PFSearchBox(wx.Window):
                 else:
                     spad = 0
 
-                dc.DrawBitmap(self.searchBitmapShadow, self.searchButtonX + 1, self.searchButtonY + 1)
-                dc.DrawBitmap(self.searchBitmap, self.searchButtonX + spad, self.searchButtonY + spad)
+                dc.DrawBitmap(self.searchBitmapShadow, round(self.searchButtonX + 1), round(self.searchButtonY + 1))
+                dc.DrawBitmap(self.searchBitmap, round(self.searchButtonX + spad), round(self.searchButtonY + spad))
 
         if self.isCancelButtonVisible:
             if self.cancelBitmap:
@@ -255,8 +262,8 @@ class PFSearchBox(wx.Window):
                     cpad = 1
                 else:
                     cpad = 0
-                dc.DrawBitmap(self.cancelBitmapShadow, self.cancelButtonX + 1, self.cancelButtonY + 1)
-                dc.DrawBitmap(self.cancelBitmap, self.cancelButtonX + cpad, self.cancelButtonY + cpad)
+                dc.DrawBitmap(self.cancelBitmapShadow, round(self.cancelButtonX + 1), round(self.cancelButtonY + 1))
+                dc.DrawBitmap(self.cancelBitmap, round(self.cancelButtonX + cpad), round(self.cancelButtonY + cpad))
 
         dc.SetPen(wx.Pen(sepColor, 1))
         dc.DrawLine(0, rect.height - 1, rect.width, rect.height - 1)

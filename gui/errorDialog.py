@@ -17,20 +17,24 @@
 # along with pyfa.  If not, see <http://www.gnu.org/licenses/>.
 # ===============================================================================
 
-# import platform
+import datetime
 import sys
-#
+import traceback
+
 # noinspection PyPackageRequirements
 import wx
-import traceback
-import config
 from logbook import Logger
+
+import config
+from gui.auxWindow import AuxiliaryFrame
 from service.prereqsCheck import version_block
 
+
+_t = wx.GetTranslation
 pyfalog = Logger(__name__)
 
 
-class ErrorHandler(object):
+class ErrorHandler:
     __parent = None
     __frame = None
 
@@ -45,6 +49,7 @@ class ErrorHandler(object):
                 app = wx.App(False)
                 cls.__frame = ErrorFrame(None)
                 cls.__frame.addException("".join(t))
+                cls.__frame.Show()
                 app.MainLoop()
                 sys.exit()
             else:
@@ -58,19 +63,27 @@ class ErrorHandler(object):
         cls.__parent = parent
 
 
-class ErrorFrame(wx.Frame):
-    def __init__(self, parent=None, error_title='Error!'):
-        wx.Frame.__init__(self, parent, id=wx.ID_ANY, title="pyfa error", pos=wx.DefaultPosition, size=wx.Size(500, 600),
-                          style=wx.DEFAULT_FRAME_STYLE ^ wx.RESIZE_BORDER | wx.STAY_ON_TOP)
+class ErrorFrame(AuxiliaryFrame):
 
-        desc = "pyfa has experienced an unexpected issue. Below is a message that contains crucial\n" \
-               "information about how this was triggered. Please contact the developers with the\n" \
-               "information provided through the EVE Online forums or file a GitHub issue."
+    def __init__(self, parent=None, error_title=_t('Error!')):
+        super().__init__(parent, id=wx.ID_ANY, title=_t("pyfa error"), pos=wx.DefaultPosition, size=wx.Size(500, 600))
+
+        from eos.config import gamedata_version, gamedata_date
+
+        if gamedata_date:
+            try:
+                time = datetime.datetime.fromtimestamp(int(gamedata_date)).strftime('%Y-%m-%d %H:%M:%S')
+            except TypeError:
+                time = None
+        else:
+            time = None
+        version = "pyfa " + config.getVersion() + '\nEVE Data Version: {} ({})\n\n'.format(gamedata_version, time)  # gui.aboutData.versionString
+
+        desc = _t("pyfa has experienced an unexpected issue. Below is a message that contains crucial \n"
+               "information about how this was triggered. Please contact the developers with the \n"
+               "information provided through the EVE Online forums or file a GitHub issue.")
 
         self.SetSizeHints(wx.DefaultSize, wx.DefaultSize)
-
-        if 'wxMSW' in wx.PlatformInfo:
-            self.SetBackgroundColour(wx.SystemSettings.GetColour(wx.SYS_COLOUR_BTNFACE))
 
         mainSizer = wx.BoxSizer(wx.VERTICAL)
         headSizer = wx.BoxSizer(wx.HORIZONTAL)
@@ -97,24 +110,19 @@ class ErrorFrame(wx.Frame):
 
         # mainSizer.AddSpacer((0, 5), 0, wx.EXPAND, 5)
 
-        self.errorTextCtrl = wx.TextCtrl(self, wx.ID_ANY, version_block.strip(), wx.DefaultPosition,
+        self.errorTextCtrl = wx.TextCtrl(self, wx.ID_ANY, version + version_block.strip(), wx.DefaultPosition,
                                          (-1, 400), wx.TE_MULTILINE | wx.TE_READONLY | wx.TE_RICH2 | wx.TE_DONTWRAP)
         self.errorTextCtrl.SetFont(wx.Font(8, wx.FONTFAMILY_TELETYPE, wx.NORMAL, wx.NORMAL))
-        mainSizer.Add(self.errorTextCtrl, 0, wx.EXPAND | wx.ALL | wx.ALIGN_CENTER, 5)
+        mainSizer.Add(self.errorTextCtrl, 0, wx.EXPAND | wx.ALL, 5)
         self.errorTextCtrl.AppendText("\n")
         self.errorTextCtrl.Layout()
 
         self.SetSizer(mainSizer)
         mainSizer.Layout()
         self.Layout()
+        self.SetMinSize(self.GetSize())
 
         self.Centre(wx.BOTH)
-        self.Bind(wx.EVT_CLOSE, self.OnClose)
-
-        self.Show()
-
-    def OnClose(self, evt):
-        self.Hide()
 
     def addException(self, text):
         self.errorTextCtrl.AppendText("\n{}\n\n{}".format("#" * 20, text))

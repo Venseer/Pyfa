@@ -17,19 +17,24 @@
 # along with eos.  If not, see <http://www.gnu.org/licenses/>.
 # ===============================================================================
 
+
+import json
 import re
 
+from logbook import Logger
 from sqlalchemy.orm import reconstructor
 
+import eos.effects
 import eos.db
-from .eqBase import EqBase
 from eos.saveddata.price import Price as types_Price
-from collections import OrderedDict
+from .eqBase import EqBase
 
-
-from logbook import Logger
 
 pyfalog = Logger(__name__)
+
+
+def _t(x):
+    return x
 
 
 class Effect(EqBase):
@@ -43,8 +48,6 @@ class Effect(EqBase):
     @ivar description: The description of this effect, this is usualy pretty useless
     @ivar published: Wether this effect is published or not, unpublished effects are typicaly unused.
     """
-    # Filter to change names of effects to valid python method names
-    nameFilter = re.compile("[^A-Za-z0-9]")
 
     @reconstructor
     def init(self):
@@ -52,8 +55,7 @@ class Effect(EqBase):
         Reconstructor, composes the object as we grab it from the database
         """
         self.__generated = False
-        self.__effectModule = None
-        self.handlerName = re.sub(self.nameFilter, "", self.name).lower()
+        self.__effectDef = None
 
     @property
     def handler(self):
@@ -143,12 +145,24 @@ class Effect(EqBase):
         Whether this effect is implemented in code or not,
         unimplemented effects simply do nothing at all when run
         """
-        return self.handler != effectDummy
+        if not self.__generated:
+            self.__generateHandler()
+
+        return self.__effectDef is not None
+
+    @property
+    def dealsDamage(self):
+        if not self.__generated:
+            self.__generateHandler()
+        return self.__dealsDamage
 
     def isType(self, type):
         """
         Check if this effect is of the passed type
         """
+        if not self.__generated:
+            self.__generateHandler()
+
         return self.type is not None and type in self.type
 
     def __generateHandler(self):
@@ -156,34 +170,40 @@ class Effect(EqBase):
         Grab the handler, type and runTime from the effect code if it exists,
         if it doesn't, set dummy values and add a dummy handler
         """
-
         try:
-            self.__effectModule = effectModule = __import__('eos.effects.' + self.handlerName, fromlist=True)
-            self.__handler = getattr(effectModule, "handler", effectDummy)
-            self.__runTime = getattr(effectModule, "runTime", "normal")
-            self.__activeByDefault = getattr(effectModule, "activeByDefault", True)
-            t = getattr(effectModule, "type", None)
-
-            t = t if isinstance(t, tuple) or t is None else (t,)
-            self.__type = t
-        except (ImportError) as e:
+            effectDefName = "Effect{}".format(self.ID)
+            pyfalog.debug("Loading {0} ({1})".format(self.name, effectDefName))
+            self.__effectDef = effectDef = getattr(eos.effects, effectDefName)
+            self.__handler = getattr(effectDef, "handler", eos.effects.BaseEffect.handler)
+            self.__runTime = getattr(effectDef, "runTime", "normal")
+            self.__activeByDefault = getattr(effectDef, "activeByDefault", True)
+            self.__dealsDamage = effectDef.dealsDamage
+            effectType = getattr(effectDef, "type", None)
+            effectType = effectType if isinstance(effectType, tuple) or effectType is None else (effectType,)
+            self.__type = effectType
+        except ImportError as e:
             # Effect probably doesn't exist, so create a dummy effect and flag it with a warning.
-            self.__handler = effectDummy
+            self.__handler = eos.effects.DummyEffect.handler
             self.__runTime = "normal"
             self.__activeByDefault = True
+            self.__dealsDamage = False
             self.__type = None
             pyfalog.debug("ImportError generating handler: {0}", e)
-        except (AttributeError) as e:
+        except AttributeError as e:
             # Effect probably exists but there is an issue with it.  Turn it into a dummy effect so we can continue, but flag it with an error.
-            self.__handler = effectDummy
+            self.__handler = eos.effects.DummyEffect.handler
             self.__runTime = "normal"
             self.__activeByDefault = True
+            self.__dealsDamage = False
             self.__type = None
             pyfalog.error("AttributeError generating handler: {0}", e)
+        except (KeyboardInterrupt, SystemExit):
+            raise
         except Exception as e:
-            self.__handler = effectDummy
+            self.__handler = eos.effects.DummyEffect.handler
             self.__runTime = "normal"
             self.__activeByDefault = True
+            self.__dealsDamage = False
             self.__type = None
             pyfalog.critical("Exception generating handler:")
             pyfalog.critical(e)
@@ -194,59 +214,59 @@ class Effect(EqBase):
         if not self.__generated:
             self.__generateHandler()
 
-        return getattr(self.__effectModule, key, None)
-
-
-def effectDummy(*args, **kwargs):
-    pass
+        try:
+            return self.__effectDef.get(key, None)
+        except (KeyboardInterrupt, SystemExit):
+            raise
+        except:
+            return getattr(self.__effectDef, key, None)
 
 
 class Item(EqBase):
-    MOVE_ATTRS = (4,  # Mass
-                  38,  # Capacity
-                  161)  # Volume
-
-    MOVE_ATTR_INFO = None
-
     ABYSSAL_TYPES = None
-
-    @classmethod
-    def getMoveAttrInfo(cls):
-        info = getattr(cls, "MOVE_ATTR_INFO", None)
-        if info is None:
-            cls.MOVE_ATTR_INFO = info = []
-            for id in cls.MOVE_ATTRS:
-                info.append(eos.db.getAttributeInfo(id))
-
-        return info
-
-    def moveAttrs(self):
-        self.__moved = True
-        for info in self.getMoveAttrInfo():
-            val = getattr(self, info.name, 0)
-            if val != 0:
-                attr = Attribute()
-                attr.info = info
-                attr.value = val
-                self.__attributes[info.name] = attr
 
     @reconstructor
     def init(self):
         self.__race = None
         self.__requiredSkills = None
         self.__requiredFor = None
-        self.__moved = False
         self.__offensive = None
         self.__assistive = None
         self.__overrides = None
-        self.__price = None
+        self.__priceObj = None
+
+    def getShortName(self, charLimit=12):
+        if len(self.name) <= charLimit:
+            return self.name
+        splitName = self.name.strip().split(' ')
+        if len(splitName) == 1:
+            return self.name
+        shortName = ''
+        for word in splitName:
+            try:
+                shortName += word[0].capitalize()
+            except IndexError:
+                pass
+        return shortName
+
+    @property
+    def customName(self):
+        return re.sub(_t('Caustic'), _t('Tachyon'), self.name)
 
     @property
     def attributes(self):
-        if not self.__moved:
-            self.moveAttrs()
-
         return self.__attributes
+
+    @property
+    def attribsWithOverrides(self):
+        overrides = self.overrides
+        attribs = {}
+        for aname, attr in self.attributes.items():
+            if aname in overrides:
+                attribs[aname] = overrides[aname]
+            else:
+                attribs[aname] = attr
+        return attribs
 
     def getAttribute(self, key, default=None):
         if key in self.attributes:
@@ -287,50 +307,26 @@ class Item(EqBase):
         eos.db.saveddata_session.delete(override)
         eos.db.commit()
 
-    srqIDMap = {182: 277, 183: 278, 184: 279, 1285: 1286, 1289: 1287, 1290: 1288}
-
     @property
     def requiredSkills(self):
         if self.__requiredSkills is None:
-            requiredSkills = OrderedDict()
-            self.__requiredSkills = requiredSkills
-            # Map containing attribute IDs we may need for required skills
-            # { requiredSkillX : requiredSkillXLevel }
-            combinedAttrIDs = set(self.srqIDMap.keys()).union(set(self.srqIDMap.values()))
-            # Map containing result of the request
-            # { attributeID : attributeValue }
-            skillAttrs = {}
-            # Get relevant attribute values from db (required skill IDs and levels) for our item
-            for attrInfo in eos.db.directAttributeRequest((self.ID,), tuple(combinedAttrIDs)):
-                attrID = attrInfo[1]
-                attrVal = attrInfo[2]
-                skillAttrs[attrID] = attrVal
-            # Go through all attributeID pairs
-            for srqIDAtrr, srqLvlAttr in self.srqIDMap.items():
-                # Check if we have both in returned result
-                if srqIDAtrr in skillAttrs and srqLvlAttr in skillAttrs:
-                    skillID = int(skillAttrs[srqIDAtrr])
-                    skillLvl = skillAttrs[srqLvlAttr]
-                    # Fetch item from database and fill map
-                    item = eos.db.getItem(skillID)
-                    requiredSkills[item] = skillLvl
+            self.__requiredSkills = {}
+            if self.reqskills:
+                for skillTypeID, skillLevel in json.loads(self.reqskills).items():
+                    skillItem = eos.db.getItem(int(skillTypeID))
+                    if skillItem:
+                        self.__requiredSkills[skillItem] = skillLevel
         return self.__requiredSkills
 
     @property
     def requiredFor(self):
         if self.__requiredFor is None:
-            self.__requiredFor = dict()
-
-            # Map containing attribute IDs we may need for required skills
-
-            # Get relevant attribute values from db (required skill IDs and levels) for our item
-            q = eos.db.getRequiredFor(self.ID, self.srqIDMap)
-
-            for itemID, lvl in q:
-                # Fetch item from database and fill map
-                item = eos.db.getItem(itemID)
-                self.__requiredFor[item] = lvl
-
+            self.__requiredFor = {}
+            if self.requiredfor:
+                for typeID, skillLevel in json.loads(self.requiredfor).items():
+                    requiredForItem = eos.db.getItem(int(typeID))
+                    if requiredForItem:
+                        self.__requiredFor[requiredForItem] = skillLevel
         return self.__requiredFor
 
     factionMap = {
@@ -346,7 +342,10 @@ class Item(EqBase):
         500016: "sisters",
         500018: "mordu",
         500019: "sansha",
-        500020: "serpentis"
+        500020: "serpentis",
+        500026: "triglavian",
+        500027: "upwell",
+        500029: "deathless",
     }
 
     @property
@@ -354,7 +353,7 @@ class Item(EqBase):
         if self.__race is None:
 
             try:
-                if self.category.categoryName == 'Structure':
+                if self.category.name == 'Structure':
                     self.__race = "upwell"
                 else:
                     self.__race = self.factionMap[self.factionID]
@@ -372,10 +371,12 @@ class Item(EqBase):
                     9  : "guristas",  # Caldari + Gallente
                     10 : "angelserp",  # Minmatar + Gallente, final race depends on the order of skills
                     12 : "sisters",  # Amarr + Gallente
+                    15 : "concord",
                     16 : "jove",
                     32 : "sansha",  # Incrusion Sansha
                     128: "ore",
-                    135: "triglavian"
+                    135: "triglavian",
+                    168: "upwell",
                 }
                 # Race is None by default
                 race = None
@@ -429,7 +430,7 @@ class Item(EqBase):
     def requiresSkill(self, skill, level=None):
         for s, l in self.requiredSkills.items():
             if isinstance(skill, str):
-                if s.name == skill and (level is None or l == level):
+                if s.typeName == skill and (level is None or l == level):
                     return True
 
             elif isinstance(skill, int) and (level is None or l == level):
@@ -446,39 +447,78 @@ class Item(EqBase):
 
     @property
     def price(self):
-
         # todo: use `from sqlalchemy import inspect` instead (mac-deprecated doesn't have inspect(), was imp[lemented in 0.8)
-        if self.__price is not None and getattr(self.__price, '_sa_instance_state', None) and self.__price._sa_instance_state.deleted:
+        if self.__priceObj is not None and getattr(self.__priceObj, '_sa_instance_state', None) and self.__priceObj._sa_instance_state.deleted:
             pyfalog.debug("Price data for {} was deleted (probably from a cache reset), resetting object".format(self.ID))
-            self.__price = None
+            self.__priceObj = None
 
-        if self.__price is None:
+        if self.__priceObj is None:
             db_price = eos.db.getPrice(self.ID)
             # do not yet have a price in the database for this item, create one
             if db_price is None:
                 pyfalog.debug("Creating a price for {}".format(self.ID))
-                self.__price = types_Price(self.ID)
-                eos.db.add(self.__price)
-                eos.db.commit()
+                self.__priceObj = types_Price(self.ID)
+                eos.db.add(self.__priceObj)
+                eos.db.flush()
             else:
-                self.__price = db_price
+                self.__priceObj = db_price
 
-        return self.__price
+        return self.__priceObj
 
     @property
     def isAbyssal(self):
         if Item.ABYSSAL_TYPES is None:
-            Item.getAbyssalYypes()
+            Item.getAbyssalTypes()
 
         return self.ID in Item.ABYSSAL_TYPES
 
     @classmethod
-    def getAbyssalYypes(cls):
+    def getAbyssalTypes(cls):
         cls.ABYSSAL_TYPES = eos.db.getAbyssalTypes()
 
+    @property
+    def isModule(self):
+        return self.category.name in ('Module', 'Structure Module')
+
+    @property
+    def isSubsystem(self):
+        return self.category.name == 'Subsystem'
+
+    @property
+    def isCharge(self):
+        return self.category.name == 'Charge'
+
+    @property
+    def isCommodity(self):
+        return self.category.name == 'Commodity'
+
+    @property
+    def isDrone(self):
+        return self.category.name == 'Drone'
+
+    @property
+    def isFighter(self):
+        return self.category.name == 'Fighter'
+
+    @property
+    def isImplant(self):
+        return self.category.name == 'Implant' and self.group.name != 'Booster'
+
+    @property
+    def isBooster(self):
+        return self.group.name == 'Booster' and self.category.name == 'Implant'
+
+    @property
+    def isStandup(self):
+        if self.category.name == "Structure Module":
+            return True
+        if self.isFighter and {'fighterSquadronIsStandupLight', 'fighterSquadronIsStandupHeavy', 'fighterSquadronIsStandupSupport'}.intersection(self.attributes):
+            return True
+        return False
+
     def __repr__(self):
-        return "Item(ID={}, name={}) at {}".format(
-                self.ID, self.name, hex(id(self))
+        return "Item(ID={}, name={}, display={}) at {}".format(
+                self.ID, self.typeName, self.name, hex(id(self))
         )
 
 
@@ -526,7 +566,23 @@ class Group(EqBase):
 
 
 class DynamicItem(EqBase):
-    pass
+
+    @property
+    def shortName(self):
+        name = self.item.customName
+        keywords = (
+            'Decayed', 'Glorified Decayed',
+            'Gravid', 'Glorified Gravid',
+            'Unstable', 'Glorified Unstable',
+            'Radical', 'Glorified Radical')
+        for kw in keywords:
+            if name.startswith(f'{kw} '):
+                name = kw
+        m = re.match(r'(?P<mutagrade>(Glorified )?\S+) (?P<dronetype>\S+) Drone (?P<mutatype>\S+) Mutaplasmid', name)
+        if m:
+            name = '{} {}'.format(m.group('mutagrade'), m.group('mutatype'))
+        name = name.replace('Glorified ', 'Gl. ')
+        return name
 
 
 class DynamicItemAttribute(EqBase):
@@ -540,15 +596,10 @@ class DynamicItemItem(EqBase):
 class MarketGroup(EqBase):
     def __repr__(self):
         return "MarketGroup(ID={}, name={}, parent={}) at {}".format(
-                self.ID, self.name, getattr(self.parent, "name", None), self.name, hex(id(self))
-        )
+            self.ID, self.name, getattr(self.parent, "name", None), hex(id(self)))
 
 
 class MetaGroup(EqBase):
-    pass
-
-
-class MetaType(EqBase):
     pass
 
 
@@ -559,55 +610,80 @@ class Unit(EqBase):
         self.displayName = None
 
     @property
+    def rigSizes(self):
+        return {
+            1: "Small",
+            2: "Medium",
+            3: "Large",
+            4: "X-Large"
+        }
+
+    @property
     def translations(self):
         """ This is a mapping of various tweaks that we have to do between the internal representation of an attribute
         value and the display (for example, 'Millisecond' units have the display name of 's', so we have to convert value
         from ms to s) """
+        # Each entry contains:
+        # Function to convert value to display value
+        # Function to convert value to display format (which sometimes can be a string)
+        # Function which controls unit name used with attribute
+        # Function to convert display value to value
         return {
             "Inverse Absolute Percent": (
                 lambda v: (1 - v) * 100,
-                lambda d: -1 * (d / 100) + 1,
-                lambda u: u),
+                lambda v: (1 - v) * 100,
+                lambda u: u,
+                lambda d: -1 * (d / 100) + 1),
             "Inversed Modifier Percent": (
                 lambda v: (1 - v) * 100,
-                lambda d: -1 * (d / 100) + 1,
-                lambda u: u),
+                lambda v: (1 - v) * 100,
+                lambda u: u,
+                lambda d: -1 * (d / 100) + 1),
             "Modifier Percent": (
+                lambda v: (v - 1) * 100,
                 lambda v: ("%+.2f" if ((v - 1) * 100) % 1 else "%+d") % ((v - 1) * 100),
-                lambda d: (d / 100) + 1,
-                lambda u: u),
+                lambda u: u,
+                lambda d: (d / 100) + 1),
             "Volume": (
                 lambda v: v,
-                lambda d: d,
-                lambda u: "m³"),
-            "Sizeclass": (
                 lambda v: v,
-                lambda d: d,
+                lambda u: "m³",
+                lambda d: d),
+            "Sizeclass": (
+                lambda v: self.rigSizes[v],
+                lambda v: self.rigSizes[v],
+                lambda d: next(i for i in self.rigSizes.keys() if self.rigSizes[i] == 'Medium'),
                 lambda u: ""),
             "Absolute Percent": (
-                lambda v: (v * 100),
-                lambda d: d / 100,
-                lambda u: u),
+                lambda v: v * 100,
+                lambda v: v * 100,
+                lambda u: u,
+                lambda d: d / 100),
             "Milliseconds": (
-                lambda v: v / 1000.0,
-                lambda d: d * 1000.0,
-                lambda u: u),
+                lambda v: v / 1000,
+                lambda v: v / 1000,
+                lambda u: u,
+                lambda d: d * 1000),
             "Boolean": (
-                lambda v: "Yes" if v == 1 else "No",
-                lambda d: 1.0 if d == "Yes" else 0.0,
-                lambda u: ""),
+                lambda v: True if v else False,
+                lambda v: "Yes" if v else "No",
+                lambda u: "",
+                lambda d: 1.0 if d == "Yes" else 0.0),
             "typeID": (
                 self.itemIDCallback,
-                None,  # we could probably convert these back if we really tried hard enough
-                lambda u: ""),
+                self.itemIDCallback,
+                lambda u: "",
+                None),  # we could probably convert these back if we really tried hard enough
             "groupID": (
                 self.groupIDCallback,
-                None,
-                lambda u: ""),
+                self.groupIDCallback,
+                lambda u: "",
+                None),
             "attributeID": (
                 self.attributeIDCallback,
-                None,
-                lambda u: ""),
+                self.attributeIDCallback,
+                lambda u: "",
+                None),
         }
 
     @staticmethod
@@ -626,29 +702,47 @@ class Unit(EqBase):
     def attributeIDCallback(v):
         v = int(v)
         if not v:  # some attributes come through with a value of 0? See #1387
-            return "%d" % (v)
-        attribute = eos.db.getAttributeInfo(v, eager=("unit"))
+            return "%d" % v
+        attribute = eos.db.getAttributeInfo(v, eager="unit")
         return "%s (%d)" % (attribute.name.capitalize(), v)
 
-    def TranslateValue(self, value):
+    def PreformatValue(self, value):
         """Attributes have to be translated certain ways based on their unit (ex: decimals converting to percentages).
         This allows us to get an easy representation of how the attribute should be printed """
 
         override = self.translations.get(self.name)
         if override is not None:
-            return override[0](value), override[2](self.displayName)
+            return override[1](value), override[2](self.displayName)
 
         return value, self.displayName
+
+    def SimplifyValue(self, value):
+        """Takes the internal representation value and convert it into the display value"""
+
+        override = self.translations.get(self.name)
+        if override is not None:
+            return override[0](value)
+
+        return value
 
     def ComplicateValue(self, value):
         """Takes the display value and turns it back into the internal representation of it"""
 
         override = self.translations.get(self.name)
         if override is not None:
-            return override[1](value)
+            return override[3](value)
 
         return value
 
 
 class Traits(EqBase):
     pass
+
+
+class ImplantSet(EqBase):
+
+    @property
+    def fullName(self):
+        if not self.gradeName:
+            return self.setName
+        return '{} {}'.format(self.gradeName, self.setName)

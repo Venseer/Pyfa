@@ -5,11 +5,13 @@ from gui.bitmap_loader import BitmapLoader
 import gui.mainFrame
 from service.settings import ContextMenuSettings
 
+_t = wx.GetTranslation
+
 
 class PFContextMenuPref(PreferenceView):
-    title = "Context Menu Panel"
 
     def populatePanel(self, panel):
+        self.title = _t("Context Menus")
         self.settings = ContextMenuSettings.getInstance()
         self.mainFrame = gui.mainFrame.MainFrame.getInstance()
 
@@ -19,12 +21,14 @@ class PFContextMenuPref(PreferenceView):
         self.stTitle = wx.StaticText(panel, wx.ID_ANY, self.title, wx.DefaultPosition, wx.DefaultSize, 0)
         self.stTitle.Wrap(-1)
         self.stTitle.SetFont(wx.Font(12, 70, 90, 90, False, wx.EmptyString))
+        mainSizer.Add(self.stTitle, 0, wx.EXPAND | wx.ALL, 5)
 
-        mainSizer.Add(self.stTitle, 0, wx.ALL, 5)
-
-        self.stSubTitle = wx.StaticText(panel, wx.ID_ANY,
-                                        "Disabling context menus can improve responsiveness.",
-                                        wx.DefaultPosition, wx.DefaultSize, 0)
+        self.stSubTitle = wx.StaticText(
+                panel, wx.ID_ANY,
+                _t('Disabling context menus can improve responsiveness.\n'
+                   'You can hold {} key + right-click to show all menu items regardless of these settings.').format(
+                        'Command' if 'wxMac' in wx.PlatformInfo else 'Control'),
+                wx.DefaultPosition, wx.DefaultSize, 0)
         self.stSubTitle.Wrap(-1)
         mainSizer.Add(self.stSubTitle, 0, wx.ALL, 5)
 
@@ -34,18 +38,18 @@ class PFContextMenuPref(PreferenceView):
 
         rbSizerRow1 = wx.BoxSizer(wx.HORIZONTAL)
 
-        self.rbBox1 = wx.RadioBox(panel, -1, "Set as Damage Pattern", wx.DefaultPosition, wx.DefaultSize, ['Disabled', 'Enabled'], 1, wx.RA_SPECIFY_COLS)
+        self.rbBox1 = wx.RadioBox(panel, -1, _t("Set as Damage Pattern"), wx.DefaultPosition, wx.DefaultSize, [_t('Disabled'), _t('Enabled')], 1, wx.RA_SPECIFY_COLS)
         self.rbBox1.SetSelection(self.settings.get('ammoPattern'))
-        rbSizerRow1.Add(self.rbBox1, 1, wx.TOP | wx.RIGHT, 5)
+        rbSizerRow1.Add(self.rbBox1, 1, wx.ALL, 5)
         self.rbBox1.Bind(wx.EVT_RADIOBOX, self.OnSetting1Change)
 
-        self.rbBox2 = wx.RadioBox(panel, -1, "Change Skills", wx.DefaultPosition, wx.DefaultSize, ['Disabled', 'Enabled'], 1, wx.RA_SPECIFY_COLS)
+        self.rbBox2 = wx.RadioBox(panel, -1, _t("Change Skills"), wx.DefaultPosition, wx.DefaultSize, [_t('Disabled'), _t('Enabled')], 1, wx.RA_SPECIFY_COLS)
         self.rbBox2.SetSelection(self.settings.get('changeAffectingSkills'))
         rbSizerRow1.Add(self.rbBox2, 1, wx.ALL, 5)
         self.rbBox2.Bind(wx.EVT_RADIOBOX, self.OnSetting2Change)
 
-        self.rbBox3 = wx.RadioBox(panel, -1, "Factor in Reload Time", wx.DefaultPosition, wx.DefaultSize, ['Disabled', 'Enabled'], 1, wx.RA_SPECIFY_COLS)
-        self.rbBox3.SetSelection(self.settings.get('factorReload'))
+        self.rbBox3 = wx.RadioBox(panel, -1, _t("Variations"), wx.DefaultPosition, wx.DefaultSize, [_t('Disabled'), _t('Enabled')], 1, wx.RA_SPECIFY_COLS)
+        self.rbBox3.SetSelection(self.settings.get('metaSwap'))
         rbSizerRow1.Add(self.rbBox3, 1, wx.ALL, 5)
         self.rbBox3.Bind(wx.EVT_RADIOBOX, self.OnSetting3Change)
 
@@ -54,20 +58,18 @@ class PFContextMenuPref(PreferenceView):
         # Row 2
         rbSizerRow2 = wx.BoxSizer(wx.HORIZONTAL)
 
-        self.rbBox4 = wx.RadioBox(panel, -1, "Variations", wx.DefaultPosition, wx.DefaultSize, ['Disabled', 'Enabled'], 1, wx.RA_SPECIFY_COLS)
-        self.rbBox4.SetSelection(self.settings.get('metaSwap'))
-        rbSizerRow2.Add(self.rbBox4, 1, wx.TOP | wx.RIGHT, 5)
+        self.rbBox4 = wx.RadioBox(panel, -1, _t("Project onto Fit"), wx.DefaultPosition, wx.DefaultSize, [_t('Disabled'), _t('Enabled')], 1, wx.RA_SPECIFY_COLS)
+        self.rbBox4.SetSelection(self.settings.get('project'))
+        rbSizerRow2.Add(self.rbBox4, 1, wx.ALL, 5)
         self.rbBox4.Bind(wx.EVT_RADIOBOX, self.OnSetting4Change)
 
-        '''
-        self.rbBox5 = wx.RadioBox(panel, -1, "Charge", wx.DefaultPosition, wx.DefaultSize, ['Disabled', 'Enabled'], 1, wx.RA_SPECIFY_COLS)
-        self.rbBox5.SetSelection(self.settings.get('moduleAmmoPicker'))
+        self.rbBox5 = wx.RadioBox(panel, -1, _t("Fill with module"), wx.DefaultPosition, wx.DefaultSize, [_t('Disabled'), _t('Enabled')], 1, wx.RA_SPECIFY_COLS)
+        self.rbBox5.SetSelection(self.settings.get('moduleFill'))
         rbSizerRow2.Add(self.rbBox5, 1, wx.ALL, 5)
         self.rbBox5.Bind(wx.EVT_RADIOBOX, self.OnSetting5Change)
-        '''
 
-        self.rbBox6 = wx.RadioBox(panel, -1, "Charge (All)", wx.DefaultPosition, wx.DefaultSize, ['Disabled', 'Enabled'], 1, wx.RA_SPECIFY_COLS)
-        self.rbBox6.SetSelection(self.settings.get('moduleGlobalAmmoPicker'))
+        self.rbBox6 = wx.RadioBox(panel, -1, _t("Spoolup"), wx.DefaultPosition, wx.DefaultSize, [_t('Disabled'), _t('Enabled')], 1, wx.RA_SPECIFY_COLS)
+        self.rbBox6.SetSelection(self.settings.get('spoolup'))
         rbSizerRow2.Add(self.rbBox6, 1, wx.ALL, 5)
         self.rbBox6.Bind(wx.EVT_RADIOBOX, self.OnSetting6Change)
 
@@ -76,10 +78,16 @@ class PFContextMenuPref(PreferenceView):
         # Row 3
         rbSizerRow3 = wx.BoxSizer(wx.HORIZONTAL)
 
-        self.rbBox7 = wx.RadioBox(panel, -1, "Project onto Fit", wx.DefaultPosition, wx.DefaultSize, ['Disabled', 'Enabled'], 1, wx.RA_SPECIFY_COLS)
-        self.rbBox7.SetSelection(self.settings.get('project'))
-        rbSizerRow3.Add(self.rbBox7, 1, wx.TOP | wx.RIGHT, 5)
+        self.rbBox7 = wx.RadioBox(panel, -1, _t("Additions Panel Copy/Paste"), wx.DefaultPosition, wx.DefaultSize, [_t('Disabled'), _t('Enabled')], 1,
+                                  wx.RA_SPECIFY_COLS)
+        self.rbBox7.SetSelection(self.settings.get('additionsCopyPaste'))
+        rbSizerRow3.Add(self.rbBox7, 1, wx.ALL, 5)
         self.rbBox7.Bind(wx.EVT_RADIOBOX, self.OnSetting7Change)
+
+        self.rbBox8 = wx.RadioBox(panel, -1, _t("Fill cargo with"), wx.DefaultPosition, wx.DefaultSize, [_t('Disabled'), _t('Enabled')], 1, wx.RA_SPECIFY_COLS)
+        self.rbBox8.SetSelection(self.settings.get('cargoFill'))
+        rbSizerRow3.Add(self.rbBox8, 1, wx.ALL, 5)
+        self.rbBox8.Bind(wx.EVT_RADIOBOX, self.OnSetting8Change)
 
         mainSizer.Add(rbSizerRow3, 1, wx.ALL | wx.EXPAND, 0)
 
@@ -93,19 +101,22 @@ class PFContextMenuPref(PreferenceView):
         self.settings.set('changeAffectingSkills', event.GetInt())
 
     def OnSetting3Change(self, event):
-        self.settings.set('factorReload', event.GetInt())
-
-    def OnSetting4Change(self, event):
         self.settings.set('metaSwap', event.GetInt())
 
+    def OnSetting4Change(self, event):
+        self.settings.set('project', event.GetInt())
+
     def OnSetting5Change(self, event):
-        self.settings.set('moduleAmmoPicker', event.GetInt())
+        self.settings.set('moduleFill', event.GetInt())
 
     def OnSetting6Change(self, event):
-        self.settings.set('moduleGlobalAmmoPicker', event.GetInt())
+        self.settings.set('spoolup', event.GetInt())
 
     def OnSetting7Change(self, event):
-        self.settings.set('project', event.GetInt())
+        self.settings.set('additionsCopyPaste', event.GetInt())
+
+    def OnSetting8Change(self, event):
+        self.settings.set('cargoFill', event.GetInt())
 
     def getImage(self):
         return BitmapLoader.getBitmap("settings_menu", "gui")

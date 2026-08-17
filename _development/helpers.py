@@ -49,6 +49,8 @@ def DBInMemory_test():
         gamedata_version = gamedata_session.execute(
             "SELECT `field_value` FROM `metadata` WHERE `field_name` LIKE 'client_build'"
         ).fetchone()[0]
+    except (KeyboardInterrupt, SystemExit):
+        raise
     except Exception as e:
         print("Missing gamedata version.")
         gamedata_version = None
@@ -72,7 +74,7 @@ def DBInMemory_test():
     # noinspection PyPep8
     #from eos.db.gamedata import alphaClones, attribute, category, effect, group, icon, item, marketGroup, metaData, metaGroup, queries, traits, unit
     # noinspection PyPep8
-    #from eos.db.saveddata import booster, cargo, character, crest, damagePattern, databaseRepair, drone, fighter, fit, implant, implantSet, loadDefaultDatabaseValues, miscData, module, override, price, queries, skill, targetResists, user
+    #from eos.db.saveddata import booster, cargo, character, crest, damagePattern, databaseRepair, drone, fighter, fit, implant, implantSet, miscData, module, override, price, queries, skill, targetProfile, user
 
     # If using in memory saveddata, you'll want to reflect it so the data structure is good.
     if saveddata_connectionstring == "sqlite:///:memory:":
@@ -100,8 +102,8 @@ def DBInMemory():
     import eos.db
 
     # Output debug info to help us troubleshoot Travis
-    print((eos.db.saveddata_engine))
-    print((eos.db.gamedata_engine))
+    print(eos.db.saveddata_engine)
+    print(eos.db.gamedata_engine)
 
     helper = {
         'config': eos.config,
@@ -129,7 +131,8 @@ def Saveddata():
     from eos.saveddata.ship import Ship
     from eos.saveddata.fit import Fit
     from eos.saveddata.character import Character
-    from eos.saveddata.module import Module, State
+    from eos.saveddata.module import Module
+    from eos.const import FittingModuleState
     from eos.saveddata.citadel import Citadel
     from eos.saveddata.booster import Booster
 
@@ -139,7 +142,7 @@ def Saveddata():
         'Fit'      : Fit,
         'Character': Character,
         'Module'   : Module,
-        'State'    : State,
+        'State'    : FittingModuleState,
         'Booster'  : Booster,
     }
     return helper

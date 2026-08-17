@@ -17,30 +17,35 @@
 # along with pyfa.  If not, see <http://www.gnu.org/licenses/>.
 # ===============================================================================
 
+import queue
 import re
 import threading
-from logbook import Logger
-import queue
+from collections import OrderedDict
 from itertools import chain
 
 # noinspection PyPackageRequirements
 import wx
+from logbook import Logger
 from sqlalchemy.sql import or_
 
 import config
 import eos.db
-from service import conversions
-from service.settings import SettingsProvider
-from service.jargon import JargonLoader
-
 from eos.gamedata import Category as types_Category, Group as types_Group, Item as types_Item, MarketGroup as types_MarketGroup, \
-    MetaGroup as types_MetaGroup, MetaType as types_MetaType
-from collections import OrderedDict
+    MetaGroup as types_MetaGroup
+from service import conversions
+from service.jargon import JargonLoader
+from service.settings import SettingsProvider
+from utils.cjk import isStringCjk
 
 pyfalog = Logger(__name__)
+_t = wx.GetTranslation
 
 # Event which tells threads dependent on Market that it's initialized
 mktRdy = threading.Event()
+
+
+class RegexTokenizationError(Exception):
+    pass
 
 
 class ShipBrowserWorkerThread(threading.Thread):
@@ -48,6 +53,7 @@ class ShipBrowserWorkerThread(threading.Thread):
         threading.Thread.__init__(self)
         pyfalog.debug("Initialize ShipBrowserWorkerThread.")
         self.name = "ShipBrowser"
+        self.running = True
 
     def run(self):
         self.queue = queue.Queue()
@@ -62,6 +68,8 @@ class ShipBrowserWorkerThread(threading.Thread):
         cache = self.cache
         sMkt = Market.getInstance()
         while True:
+            if not self.running:
+                break
             try:
                 id_, callback = queue.get()
                 set_ = cache.get(id_)
@@ -70,25 +78,34 @@ class ShipBrowserWorkerThread(threading.Thread):
                     cache[id_] = set_
 
                 wx.CallAfter(callback, (id_, set_))
+            except (KeyboardInterrupt, SystemExit):
+                raise
             except Exception as e:
                 pyfalog.critical("Callback failed.")
                 pyfalog.critical(e)
             finally:
                 try:
                     queue.task_done()
+                except (KeyboardInterrupt, SystemExit):
+                    raise
                 except Exception as e:
                     pyfalog.critical("Queue task done failed.")
                     pyfalog.critical(e)
 
+    def stop(self):
+        self.running = False
+
 
 class SearchWorkerThread(threading.Thread):
+
     def __init__(self):
         threading.Thread.__init__(self)
         self.name = "SearchWorker"
         self.jargonLoader = JargonLoader.instance()
         # load the jargon while in an out-of-thread context, to spot any problems while in the main thread
         self.jargonLoader.get_jargon()
-        self.jargonLoader.get_jargon().apply('test string')
+        self.jargonLoader.get_jargon().apply('test string'.split())
+        self.running = True
 
     def run(self):
         self.cv = threading.Condition()
@@ -99,51 +116,132 @@ class SearchWorkerThread(threading.Thread):
         cv = self.cv
 
         while True:
+            if not self.running:
+                break
             cv.acquire()
             while self.searchRequest is None:
                 cv.wait()
 
-            request, callback, filterOn = self.searchRequest
+            request, callback, filterName = self.searchRequest
             self.searchRequest = None
             cv.release()
             sMkt = Market.getInstance()
-            if filterOn is True:
+            if filterName == 'market':
                 # Rely on category data provided by eos as we don't hardcode them much in service
-                filter_ = or_(types_Category.name.in_(sMkt.SEARCH_CATEGORIES), types_Group.name.in_(sMkt.SEARCH_GROUPS))
-            elif filterOn:  # filter by selected categories
-                filter_ = types_Category.name.in_(filterOn)
+                filters = [or_(
+                    types_Category.name.in_(sMkt.SEARCH_CATEGORIES),
+                    types_Group.name.in_(sMkt.SEARCH_GROUPS))]
+            # Used in implant editor
+            elif filterName == 'implants':
+                filters = [types_Category.name == 'Implant']
+            # Actually not everything, just market search + ships
+            elif filterName == 'everything':
+                filters = [
+                    or_(
+                        types_Category.name.in_(sMkt.FIT_CATEGORIES),
+                        types_Group.name.in_(sMkt.FIT_GROUPS)),
+                    or_(
+                        types_Category.name.in_(sMkt.SEARCH_CATEGORIES),
+                        types_Group.name.in_(sMkt.SEARCH_GROUPS))]
             else:
-                filter_ = None
+                filters = [None]
 
-            jargon_request = self.jargonLoader.get_jargon().apply(request)
+            if request.strip().lower().startswith('re:'):
+                requestTokens = self._prepareRequestRegex(request[3:])
+            else:
+                requestTokens = self._prepareRequestNormal(request)
+            requestTokens = self.jargonLoader.get_jargon().apply(requestTokens)
 
-            results = []
-            if len(request) >= config.minItemSearchLength:
-                results = eos.db.searchItems(request, where=filter_,
-                                             join=(types_Item.group, types_Group.category),
-                                             eager=("group.category", "metaGroup", "metaGroup.parent"))
+            all_results = set()
+            joinedTokens = ' '.join(requestTokens)
+            if (
+                (isStringCjk(joinedTokens) and len(joinedTokens) >= config.minItemSearchLengthCjk)
+                or len(joinedTokens) >= config.minItemSearchLength
+            ):
+                for filter_ in filters:
+                    filtered_results = eos.db.searchItemsRegex(
+                        requestTokens, where=filter_,
+                        join=(types_Item.group, types_Group.category),
+                        eager=("group.category", "metaGroup"))
+                    all_results.update(filtered_results)
 
-            jargon_results = []
-            if len(jargon_request) >= config.minItemSearchLength:
-                jargon_results = eos.db.searchItems(jargon_request, where=filter_,
-                                             join=(types_Item.group, types_Group.category),
-                                             eager=("group.category", "metaGroup", "metaGroup.parent"))
-
-            items = set()
+            item_IDs = set()
             # Return only published items, consult with Market service this time
-            for item in [*results, *jargon_results]:
+            for item in all_results:
                 if sMkt.getPublicityByItem(item):
-                    items.add(item)
-            wx.CallAfter(callback, items)
+                    item_IDs.add(item.ID)
+            wx.CallAfter(callback, sorted(item_IDs))
 
-    def scheduleSearch(self, text, callback, filterOn=True):
+    def scheduleSearch(self, text, callback, filterName=None):
         self.cv.acquire()
-        self.searchRequest = (text, callback, filterOn)
+        self.searchRequest = (text, callback, filterName)
         self.cv.notify()
         self.cv.release()
 
+    def stop(self):
+        self.running = False
 
-class Market(object):
+    def _prepareRequestNormal(self, request):
+        # Escape regexp-specific symbols, and un-escape whitespaces
+        request = re.escape(request)
+        request = re.sub(r'\\(?P<ws>\s+)', r'\g<ws>', request)
+        # Imitate wildcard search
+        request = re.sub(r'\\\*', r'\\w*', request)
+        request = re.sub(r'\\\?', r'\\w?', request)
+        tokens = request.split()
+        return tokens
+
+    def _prepareRequestRegex(self, request):
+        roundLvl = 0
+        squareLvl = 0
+        nextEscaped = False
+        tokens = []
+        currentToken = ''
+
+        def verifyErrors():
+            if squareLvl not in (0, 1):
+                raise RegexTokenizationError('Square braces level is {}'.format(squareLvl))
+            if roundLvl < 0:
+                raise RegexTokenizationError('Round braces level is {}'.format(roundLvl))
+
+        try:
+            for char in request:
+                thisEscaped = nextEscaped
+                nextEscaped = False
+                if thisEscaped:
+                    currentToken += char
+                elif char == '\\':
+                    currentToken += char
+                    nextEscaped = True
+                elif char == '[':
+                    currentToken += char
+                    squareLvl += 1
+                elif char == ']':
+                    currentToken += char
+                    squareLvl -= 1
+                elif char == '(' and squareLvl == 0:
+                    currentToken += char
+                    roundLvl += 1
+                elif char == ')' and squareLvl == 0:
+                    currentToken += char
+                    roundLvl -= 1
+                elif char.isspace() and roundLvl == squareLvl == 0:
+                    if currentToken:
+                        tokens.append(currentToken)
+                        currentToken = ''
+                else:
+                    currentToken += char
+                verifyErrors()
+            else:
+                if currentToken:
+                    tokens.append(currentToken)
+        # Treat request as normal string if regex tokenization fails
+        except RegexTokenizationError:
+            tokens = self._prepareRequestNormal(request)
+        return tokens
+
+
+class Market:
     instance = None
 
     def __init__(self):
@@ -170,6 +268,7 @@ class Market(object):
         self.les_grp = types_Group()
         self.les_grp.ID = -1
         self.les_grp.name = "Limited Issue Ships"
+        self.les_grp.displayName = _t("Limited Issue Ships")
         self.les_grp.published = True
         ships = self.getCategory("Ship")
         self.les_grp.category = ships
@@ -177,8 +276,8 @@ class Market(object):
         self.les_grp.description = ""
         self.les_grp.icon = None
         self.ITEMS_FORCEGROUP = {
-            "Opux Luxury Yacht"           : self.les_grp,
-            # One of those is wedding present at CCP fanfest, another was hijacked from ISD guy during an event
+            "Capsule"                     : self.getGroup("Shuttle"),
+            "Opux Luxury Yacht"           : self.les_grp,  # One of those is wedding present at CCP fanfest, another was hijacked from ISD guy during an event
             "Silver Magnate"              : self.les_grp,  # Amarr Championship prize
             "Gold Magnate"                : self.les_grp,  # Amarr Championship prize
             "Armageddon Imperial Issue"   : self.les_grp,  # Amarr Championship prize
@@ -187,7 +286,6 @@ class Market(object):
             "Megathron Federate Issue"    : self.les_grp,  # Reward during Crielere event
             "Raven State Issue"           : self.les_grp,  # AT4 prize
             "Tempest Tribal Issue"        : self.les_grp,  # AT4 prize
-            "Apotheosis"                  : self.les_grp,  # 5th EVE anniversary present
             "Zephyr"                      : self.les_grp,  # 2010 new year gift
             "Primae"                      : self.les_grp,  # Promotion of planetary interaction
             "Council Diplomatic Shuttle"  : self.les_grp,  # CSM X celebration
@@ -213,12 +311,27 @@ class Market(object):
             "Fiend"                       : self.les_grp,  # AT13 prize
             "Caedes"                      : self.les_grp,  # AT14 prize
             "Rabisu"                      : self.les_grp,  # AT14 prize
-            "Victor"                      : self.les_grp,  # AT prize
-            "Virtuoso"                    : self.les_grp,  # AT prize
+            "Victor"                      : self.les_grp,  # AT15 prize
+            "Virtuoso"                    : self.les_grp,  # AT15 prize
+            "Hydra"                       : self.les_grp,  # AT16 prize
+            "Tiamat"                      : self.les_grp,  # AT16 prize
+            "Raiju"                       : self.les_grp,  # AT17 prize
+            "Laelaps"                     : self.les_grp,  # AT17 prize
+            "Boobook"                     : self.les_grp,  # 19th EVE anniversary gift
+            "Geri"                        : self.les_grp,  # AT18 prize
+            "Bestla"                      : self.les_grp,  # AT18 prize
+            "Shapash"                     : self.les_grp,  # AT19 prize
+            "Cybele"                      : self.les_grp,  # AT19 prize
+            "Sidewinder"                  : self.les_grp,  # AT20 prize
+            "Cobra"                       : self.les_grp,  # AT20 prize
+            "Python"                      : self.les_grp,  # AT20 prize
+            "Skua"                        : self.les_grp,  # AT21 prize
+            "Anhinga"                     : self.les_grp,  # AT21 prize
         }
 
         self.ITEMS_FORCEGROUP_R = self.__makeRevDict(self.ITEMS_FORCEGROUP)
-        self.les_grp.addItems = list(self.getItem(itmn) for itmn in self.ITEMS_FORCEGROUP_R[self.les_grp])
+        for grp, itemNames in self.ITEMS_FORCEGROUP_R.items():
+            grp.addItems = list(self.getItem(i) for i in itemNames)
         self.customGroups.add(self.les_grp)
 
         # List of items which are forcibly published or hidden
@@ -261,12 +374,11 @@ class Market(object):
         # Dictionary of items with forced meta groups, uses following format:
         # Item name: (metagroup name, parent type name)
         self.ITEMS_FORCEDMETAGROUP = {
-            "'Habitat' Miner I"                        : ("Storyline", "Miner I"),
-            "'Wild' Miner I"                           : ("Storyline", "Miner I"),
-            "Medium Nano Armor Repair Unit I"          : ("Tech I", "Medium Armor Repairer I"),
-            "Large 'Reprieve' Vestment Reconstructer I": ("Storyline", "Large Armor Repairer I"),
-            "Khanid Navy Torpedo Launcher"             : ("Faction", "Torpedo Launcher I"),
-        }
+            "'Habitat' Miner I": ("Storyline", "Miner I"),
+            "'Wild' Miner I": ("Storyline", "Miner I"),
+            "Khanid Navy Torpedo Launcher": ("Faction", "Torpedo Launcher I"),
+            "Dread Guristas Standup Variable Spectrum ECM": ("Structure Faction", "Standup Variable Spectrum ECM I"),
+            "Dark Blood Standup Heavy Energy Neutralizer": ("Structure Faction", "Standup Heavy Energy Neutralizer I")}
         # Parent type name: set(item names)
         self.ITEMS_FORCEDMETAGROUP_R = {}
         for item, value in list(self.ITEMS_FORCEDMETAGROUP.items()):
@@ -277,57 +389,48 @@ class Market(object):
         # Dictionary of items with forced market group (service assumes they have no
         # market group assigned in db, otherwise they'll appear in both original and forced groups)
         self.ITEMS_FORCEDMARKETGROUP = {
-            "Advanced Cerebral Accelerator"             : 977,  # Implants & Boosters > Booster
-            "Civilian Damage Control"                   : 615,  # Ship Equipment > Hull & Armor > Damage Controls
-            "Civilian EM Ward Field"                    : 1695,
-            # Ship Equipment > Shield > Shield Hardeners > EM Shield Hardeners
-            "Civilian Explosive Deflection Field"       : 1694,
-            # Ship Equipment > Shield > Shield Hardeners > Explosive Shield Hardeners
+            "Advanced Cerebral Accelerator"             : 2487,  # Implants & Boosters > Booster > Cerebral Accelerators
             "Civilian Hobgoblin"                        : 837,  # Drones > Combat Drones > Light Scout Drones
-            "Civilian Kinetic Deflection Field"         : 1693,
-            # Ship Equipment > Shield > Shield Hardeners > Kinetic Shield Hardeners
-            "Civilian Light Missile Launcher"           : 640,
-            # Ship Equipment > Turrets & Bays > Missile Launchers > Light Missile Launchers
-            "Civilian Scourge Light Missile"            : 920,
-            # Ammunition & Charges > Missiles > Light Missiles > Standard Light Missiles
-            "Civilian Small Remote Armor Repairer"      : 1059,
-            # Ship Equipment > Hull & Armor > Remote Armor Repairers > Small
+            "Civilian Light Missile Launcher"           : 640,  # Ship Equipment > Turrets & Launchers > Missile Launchers > Light Missile Launchers
+            "Civilian Scourge Light Missile"            : 920,  # Ammunition & Charges > Missiles > Light Missiles > Standard Light Missiles
+            "Civilian Small Remote Armor Repairer"      : 1059,  # Ship Equipment > Hull & Armor > Remote Armor Repairers > Small
             "Civilian Small Remote Shield Booster"      : 603,  # Ship Equipment > Shield > Remote Shield Boosters > Small
-            "Civilian Stasis Webifier"                  : 683,  # Ship Equipment > Electronic Warfare > Stasis Webifiers
-            "Civilian Warp Disruptor"                   : 1935,  # Ship Equipment > Electronic Warfare > Warp Disruptors
-            "Hardwiring - Zainou 'Sharpshooter' ZMX10"  : 1493,
-            # Implants & Boosters > Implants > Skill Hardwiring > Missile Implants > Implant Slot 06
-            "Hardwiring - Zainou 'Sharpshooter' ZMX100" : 1493,
-            # Implants & Boosters > Implants > Skill Hardwiring > Missile Implants > Implant Slot 06
-            "Hardwiring - Zainou 'Sharpshooter' ZMX1000": 1493,
-            # Implants & Boosters > Implants > Skill Hardwiring > Missile Implants > Implant Slot 06
-            "Hardwiring - Zainou 'Sharpshooter' ZMX11"  : 1493,
-            # Implants & Boosters > Implants > Skill Hardwiring > Missile Implants > Implant Slot 06
-            "Hardwiring - Zainou 'Sharpshooter' ZMX110" : 1493,
-            # Implants & Boosters > Implants > Skill Hardwiring > Missile Implants > Implant Slot 06
-            "Hardwiring - Zainou 'Sharpshooter' ZMX1100": 1493,
-            # Implants & Boosters > Implants > Skill Hardwiring > Missile Implants > Implant Slot 06
-            "Nugoehuvi Synth Blue Pill Booster"         : 977,  # Implants & Boosters > Booster
-            "Prototype Cerebral Accelerator"            : 977,  # Implants & Boosters > Booster
-            "Prototype Iris Probe Launcher"             : 712,  # Ship Equipment > Turrets & Bays > Scan Probe Launchers
-            "Shadow"                                    : 1310,  # Drones > Combat Drones > Fighter Bombers
-            "Standard Cerebral Accelerator"             : 977,  # Implants & Boosters > Booster
+            "Hardwiring - Zainou 'Sharpshooter' ZMX10"  : 1493,  # Implants & Boosters > Implants > Skill Hardwiring > Missile Implants > Implant Slot 06
+            "Hardwiring - Zainou 'Sharpshooter' ZMX100" : 1493,  # Implants & Boosters > Implants > Skill Hardwiring > Missile Implants > Implant Slot 06
+            "Hardwiring - Zainou 'Sharpshooter' ZMX1000": 1493,  # Implants & Boosters > Implants > Skill Hardwiring > Missile Implants > Implant Slot 06
+            "Hardwiring - Zainou 'Sharpshooter' ZMX11"  : 1493,  # Implants & Boosters > Implants > Skill Hardwiring > Missile Implants > Implant Slot 06
+            "Hardwiring - Zainou 'Sharpshooter' ZMX110" : 1493,  # Implants & Boosters > Implants > Skill Hardwiring > Missile Implants > Implant Slot 06
+            "Hardwiring - Zainou 'Sharpshooter' ZMX1100": 1493,  # Implants & Boosters > Implants > Skill Hardwiring > Missile Implants > Implant Slot 06
+            "Prototype Cerebral Accelerator"            : 2487,  # Implants & Boosters > Booster > Cerebral Accelerators
+            "Prototype Iris Probe Launcher"             : 712,  # Ship Equipment > Scanning Equipment > Scan Probe Launchers
+            "Standard Cerebral Accelerator"             : 2487,  # Implants & Boosters > Booster > Cerebral Accelerators
         }
 
         self.ITEMS_FORCEDMARKETGROUP_R = self.__makeRevDict(self.ITEMS_FORCEDMARKETGROUP)
 
         self.FORCEDMARKETGROUP = {
-            685: False,  # Ship Equipment > Electronic Warfare > ECCM
-            681: False,  # Ship Equipment > Electronic Warfare > Sensor Backup Arrays
-            1639: False  # Ship Equipment > Fleet Assistance > Command Processors
+            685: False,   # Ship Equipment > Electronic Warfare > ECCM
+            681: False,   # Ship Equipment > Electronic Warfare > Sensor Backup Arrays
+            1639: False,  # Ship Equipment > Fleet Assistance > Command Processors
+            2527: True,   # Ship Equipment > Hull & Armor > Mutadaptive Remote Armor Repairers - has hasTypes set to 1 while actually having no types
         }
 
         # Misc definitions
         # 0 is for items w/o meta group
-        self.META_MAP = OrderedDict([("normal", frozenset((0, 1, 2, 14))),
-                                     ("faction", frozenset((4, 3))),
+        self.META_MAP = OrderedDict([("faction", frozenset((4, 3, 52))),
                                      ("complex", frozenset((6,))),
                                      ("officer", frozenset((5,)))])
+        nonNormalMetas = set(chain(*self.META_MAP.values()))
+        self.META_MAP["normal"] = frozenset((0, *(mg.ID for mg in eos.db.getMetaGroups() if mg.ID not in nonNormalMetas)))
+        self.META_MAP.move_to_end("normal", last=False)
+        self.META_MAP_REVERSE = {sv: k for k, v in self.META_MAP.items() for sv in v}
+        self.META_MAP_REVERSE_GROUPED = {}
+        i = 0
+        for mgids in self.META_MAP.values():
+            for mgid in mgids:
+                self.META_MAP_REVERSE_GROUPED[mgid] = i
+            i += 1
+        self.META_MAP_REVERSE_INDICES = self.__makeReverseMetaMapIndices()
         self.SEARCH_CATEGORIES = (
             "Drone",
             "Module",
@@ -339,17 +442,29 @@ class Market(object):
             "Structure",
             "Structure Module",
         )
-        self.SEARCH_GROUPS = ("Ice Product",)
-        self.ROOT_MARKET_GROUPS = (9,  # Modules
+        self.SEARCH_GROUPS = (
+            "Ice Product",
+            "Cargo Container",
+            "Secure Cargo Container",
+            "Audit Log Secure Container",
+            "Freight Container",
+            "Jump Filaments",
+            "Triglavian Space Filaments"
+        )
+        self.ROOT_MARKET_GROUPS = (9,  # Ship Equipment
                                    1111,  # Rigs
                                    157,  # Drones
-                                   11,  # Ammo
+                                   11,  # Ammunition & Charges
                                    1112,  # Subsystems
                                    24,  # Implants & Boosters
-                                   404,  # Deployables
+                                   404,  # Deployable Structures
                                    2202,  # Structure Equipment
-                                   2203  # Structure Modifications
+                                   2203,  # Structure Modifications
+                                   2456  # Filaments
                                    )
+        self.SHOWN_MARKET_GROUPS = eos.db.getMarketTreeNodeIds(self.ROOT_MARKET_GROUPS)
+        self.FIT_CATEGORIES = ['Ship']
+        self.FIT_GROUPS = ['Citadel', 'Engineering Complex', 'Refinery']
         # Tell other threads that Market is at their service
         mktRdy.set()
 
@@ -368,6 +483,15 @@ class Market(object):
                 rev[value] = set()
             rev[value].add(item)
         return rev
+
+    def __makeReverseMetaMapIndices(self):
+        revmap = {}
+        i = 0
+        for mgids in self.META_MAP.values():
+            for mgid in mgids:
+                revmap[mgid] = i
+            i += 1
+        return revmap
 
     @staticmethod
     def getItem(identity, *args, **kwargs):
@@ -388,11 +512,18 @@ class Market(object):
                 item = eos.db.getItem(id_, *args, **kwargs)
             else:
                 raise TypeError("Need Item object, integer, float or string as argument")
+        except (KeyboardInterrupt, SystemExit):
+            raise
         except:
             pyfalog.error("Could not get item: {0}", identity)
             raise
 
         return item
+
+    @staticmethod
+    def getItems(itemIDs, eager=None):
+        items = eos.db.getItems(itemIDs, eager=eager)
+        return items
 
     def getGroup(self, identity, *args, **kwargs):
         """Get group by its ID or name"""
@@ -454,8 +585,8 @@ class Market(object):
 
     def getGroupByItem(self, item):
         """Get group by item"""
-        if item.name in self.ITEMS_FORCEGROUP:
-            group = self.ITEMS_FORCEGROUP[item.name]
+        if item.typeName in self.ITEMS_FORCEGROUP:
+            group = self.ITEMS_FORCEGROUP[item.typeName]
         else:
             group = item.group
         return group
@@ -470,19 +601,8 @@ class Market(object):
         """Get meta group by item"""
         # Check if item is in forced metagroup map
         if item.name in self.ITEMS_FORCEDMETAGROUP:
-            # Create meta group from scratch
-            metaGroup = types_MetaType()
-            # Get meta group info object based on meta group name
-            metaGroupInfo = self.getMetaGroup(self.ITEMS_FORCEDMETAGROUP[item.name][0])
-            # Get parent item based on its name
-            parent = self.getItem(self.ITEMS_FORCEDMETAGROUP[item.name][1])
-            # Assign all required for metaGroup variables
-            metaGroup.info = metaGroupInfo
-            metaGroup.items = item
-            metaGroup.parent = parent
-            metaGroup.metaGroupID = metaGroupInfo.ID
-            metaGroup.parentTypeID = parent.ID
-            metaGroup.typeID = item.ID
+            metaGroupName = self.ITEMS_FORCEDMETAGROUP[item.name][0]
+            metaGroup = eos.db.getMetaGroup(metaGroupName)
         # If no forced meta group is provided, try to use item's
         # meta group if any
         else:
@@ -499,15 +619,21 @@ class Market(object):
         # Check if we force market group for given item
         if item.name in self.ITEMS_FORCEDMARKETGROUP:
             mgid = self.ITEMS_FORCEDMARKETGROUP[item.name]
-            return self.getMarketGroup(mgid)
+            if mgid in self.SHOWN_MARKET_GROUPS:
+                return self.getMarketGroup(mgid)
+            else:
+                return None
         # Check if item itself has market group
         elif item.marketGroupID:
-            return item.marketGroup
+            if item.marketGroupID in self.SHOWN_MARKET_GROUPS:
+                return item.marketGroup
+            else:
+                return None
         elif parentcheck:
             # If item doesn't have marketgroup, check if it has parent
             # item and use its market group
             parent = self.getParentItemByItem(item, selfparent=False)
-            if parent:
+            if parent and parent.marketGroupID in self.SHOWN_MARKET_GROUPS:
                 return parent.marketGroup
             else:
                 return None
@@ -516,14 +642,15 @@ class Market(object):
 
     def getParentItemByItem(self, item, selfparent=True):
         """Get parent item by item"""
-        mg = self.getMetaGroupByItem(item)
-        if mg:
-            parent = mg.parent
+        parent = None
+        if item.name in self.ITEMS_FORCEDMETAGROUP:
+            parentName = self.ITEMS_FORCEDMETAGROUP[item.name][1]
+            parent = self.getItem(parentName)
+        if parent is None:
+            parent = item.varParent
         # Consider self as parent if item has no parent in database
-        elif selfparent is True:
+        if parent is None and selfparent is True:
             parent = item
-        else:
-            parent = None
         return parent
 
     def getVariationsByItems(self, items, alreadyparent=False):
@@ -538,7 +665,7 @@ class Market(object):
         categories = ['Drone', 'Fighter', 'Implant']
 
         for item in items:
-            if item.category.ID == 20:  # Implants and Boosters
+            if item.category.ID == 20 and item.group.ID != 303:  # Implants not Boosters
                 implant_remove_list = set()
                 implant_remove_list.add("Low-Grade ")
                 implant_remove_list.add("Low-grade ")
@@ -552,15 +679,6 @@ class Market(object):
                 implant_remove_list.add(" - Elite")
                 implant_remove_list.add(" - Improved")
                 implant_remove_list.add(" - Standard")
-                implant_remove_list.add("Copper ")
-                implant_remove_list.add("Gold ")
-                implant_remove_list.add("Silver ")
-                implant_remove_list.add("Advanced ")
-                implant_remove_list.add("Improved ")
-                implant_remove_list.add("Prototype ")
-                implant_remove_list.add("Standard ")
-                implant_remove_list.add("Strong ")
-                implant_remove_list.add("Synth ")
 
                 for implant_prefix in ("-6", "-7", "-8", "-9", "-10"):
                     for i in range(50):
@@ -596,6 +714,16 @@ class Market(object):
             if trimmed_variations_list:
                 variations_list = trimmed_variations_list
 
+        # If the items are boosters then filter variations to only include boosters for the same slot.
+        BOOSTER_GROUP_ID = 303
+        if all(map(lambda i: i.group.ID == BOOSTER_GROUP_ID, items)) and len(items) > 0:
+            # 'boosterness' is the database's attribute name for Booster Slot
+            reqSlot = next(items.__iter__()).getAttribute('boosterness')
+            # If the item and it's variation both have a marketGroupID it should match for the variation to be considered valid.
+            marketGroupID = [next(filter(None, map(lambda i: i.marketGroupID, items)), None), None]
+            matchSlotAndMktGrpID = lambda v: v.getAttribute('boosterness') == reqSlot and v.marketGroupID in marketGroupID
+            variations_list = list(filter(matchSlotAndMktGrpID, variations_list))
+
         variations.update(variations_list)
         return variations
 
@@ -620,8 +748,9 @@ class Market(object):
         groupItems = set(group.items)
         if hasattr(group, 'addItems'):
             groupItems.update(group.addItems)
-        items = set(
-                [item for item in groupItems if self.getPublicityByItem(item) and self.getGroupByItem(item) == group])
+        items = set([
+            item for item in groupItems
+            if self.getPublicityByItem(item) and self.getGroupByItem(item) == group])
         return items
 
     def getItemsByMarketGroup(self, mg, vars_=True):
@@ -657,8 +786,14 @@ class Market(object):
     def marketGroupHasTypesCheck(self, mg):
         """If market group has any items, return true"""
         if mg and mg.ID in self.ITEMS_FORCEDMARKETGROUP_R:
+            # This shouldn't occur normally but makes errors more mild when ITEMS_FORCEDMARKETGROUP is outdated.
+            if len(mg.children) > 0 and len(mg.items) == 0:
+                pyfalog.error(("Market group \"{0}\" contains no items and has children. "
+                    "ITEMS_FORCEDMARKETGROUP is likely outdated and will need to be "
+                    "updated for {1} to display correctly.").format(mg, self.ITEMS_FORCEDMARKETGROUP_R[mg.ID]))
+                return False
             return True
-        elif len(mg.items) > 0:
+        elif len(mg.items) > 0 and len(mg.children) == 0:
             return True
         else:
             return False
@@ -692,7 +827,7 @@ class Market(object):
                 except KeyError:
                     return ""
 
-                return item.iconID if item.icon else ""
+                return item.iconID if getattr(item, "icon", None) else ""
             elif self.getMarketGroupChildren(mg) > 0:
                 kids = self.getMarketGroupChildren(mg)
                 mktGroups = self.getIconByMarketGroup(kids)
@@ -703,8 +838,8 @@ class Market(object):
 
     def getPublicityByItem(self, item):
         """Return if an item is published"""
-        if item.name in self.ITEMS_FORCEPUBLISHED:
-            pub = self.ITEMS_FORCEPUBLISHED[item.name]
+        if item.typeName in self.ITEMS_FORCEPUBLISHED:
+            pub = self.ITEMS_FORCEPUBLISHED[item.typeName]
         else:
             pub = item.published
         return pub
@@ -752,16 +887,16 @@ class Market(object):
         filter_ = types_Category.name.in_(["Ship", "Structure"])
         results = eos.db.searchItems(name, where=filter_,
                                      join=(types_Item.group, types_Group.category),
-                                     eager=("group.category", "metaGroup", "metaGroup.parent"))
+                                     eager=("group.category", "metaGroup"))
         ships = set()
         for item in results:
             if self.getPublicityByItem(item):
                 ships.add(item)
         return ships
 
-    def searchItems(self, name, callback, filterOn=True):
+    def searchItems(self, name, callback, filterName=None):
         """Find items according to given text pattern"""
-        self.searchWorkerThread.scheduleSearch(name, callback, filterOn)
+        self.searchWorkerThread.scheduleSearch(name, callback, filterName)
 
     @staticmethod
     def getItemsWithOverrides():
@@ -798,5 +933,78 @@ class Market(object):
 
     def filterItemsByMeta(self, items, metas):
         """Filter items by meta lvl"""
-        filtered = set([item for item in items if self.getMetaGroupIdByItem(item) in metas])
+        filtered = [item for item in items if self.getMetaGroupIdByItem(item) in metas]
         return filtered
+
+    def getReplacements(self, identity):
+        item = self.getItem(identity)
+        # We already store needed type IDs in database
+        replTypeIDs = {int(i) for i in item.replacements.split(",") if i} if item.replacements is not None else {}
+        if not replTypeIDs:
+            return ()
+        # As replacements were generated without keeping track which items were published,
+        # filter them out here
+        items = []
+        for typeID in replTypeIDs:
+            item = self.getItem(typeID)
+            if not item:
+                continue
+            if self.getPublicityByItem(item):
+                items.append(item)
+        return items
+
+    def getRecentlyUsed(self):
+        recentlyUsedItems = []
+        for itemID in self.serviceMarketRecentlyUsedModules["pyfaMarketRecentlyUsedModules"]:
+            item = self.getItem(itemID)
+            if item is None:
+                self.serviceMarketRecentlyUsedModules["pyfaMarketRecentlyUsedModules"].remove(itemID)
+            recentlyUsedItems.append(item)
+        return recentlyUsedItems
+
+    def storeRecentlyUsed(self, itemID):
+        recentlyUsedModules = self.serviceMarketRecentlyUsedModules["pyfaMarketRecentlyUsedModules"]
+        while itemID in recentlyUsedModules:
+            recentlyUsedModules.remove(itemID)
+        item = self.getItem(itemID)
+        if item.isAbyssal:
+            return
+        while len(recentlyUsedModules) >= 20:
+            recentlyUsedModules.pop(-1)
+        recentlyUsedModules.insert(0, itemID)
+
+    def itemSort(self, item, reverseMktGrp=False):
+        catname = self.getCategoryByItem(item).name
+        try:
+            mktgrpid = self.getMarketGroupByItem(item).ID
+        except AttributeError:
+            mktgrpid = -1
+            pyfalog.warning("unable to find market group for {}".format(item.typeName))
+        if reverseMktGrp:
+            mktgrpid = -mktgrpid
+        parentname = self.getParentItemByItem(item).name
+        # Get position of market group
+        metagrpid = self.getMetaGroupIdByItem(item)
+        metatab = self.META_MAP_REVERSE_GROUPED.get(metagrpid)
+        metalvl = item.metaLevel or 0
+        return catname, mktgrpid, parentname, metatab, metalvl, item.name
+
+    def printAllItems(self):
+        items = set()
+
+        def handleMg(marketGroup, path=()):
+            marketGroup = self.getMarketGroup(marketGroup, eager=("items", "items.metaGroup", "children"))
+            path = path + (marketGroup.name,)
+            # print(' > '.join(path))
+            for item in self.getItemsByMarketGroup(marketGroup):
+                items.add(item.ID)
+            for mgc in self.getMarketGroupChildren(marketGroup):
+                handleMg(mgc, path=path)
+
+        for mg in self.ROOT_MARKET_GROUPS:
+            handleMg(mg)
+        print('---')
+        for i in sorted(items):
+            print(i)
+
+

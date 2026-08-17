@@ -1,7 +1,9 @@
 import math
 
+from eos.utils.round import roundToPrec, roundDec
 
-def formatAmount(val, prec=3, lowest=0, highest=0, currency=False, forceSign=False):
+
+def formatAmount(val, prec=3, lowest=0, highest=0, currency=False, forceSign=False, unitName=None):
     """
     Add suffix to value, transform value to match new suffix and round it.
 
@@ -12,9 +14,12 @@ def formatAmount(val, prec=3, lowest=0, highest=0, currency=False, forceSign=Fal
     highest -- highest order for suffixizing for numbers |num| > 1
     currency -- if currency, billion suffix will be B instead of G
     forceSign -- if True, positive numbers are signed too
+    unitName -- if specified, will be formatted into a string
     """
     if val is None:
         return ""
+    if val == math.inf:
+        return "\u221e" if unitName is None else "\u221e {}".format(unitName)
     # Define suffix maps
     posSuffixMap = {3: "k", 6: "M", 9: "B" if currency is True else "G"}
     negSuffixMap = {-6: '\u03bc', -3: "m"}
@@ -89,24 +94,8 @@ def formatAmount(val, prec=3, lowest=0, highest=0, currency=False, forceSign=Fal
     mantissa = roundToPrec(mantissa, prec)
     sign = "+" if forceSign is True and mantissa > 0 else ""
     # Round mantissa and add suffix
-    result = "{0}{1}{2}".format(sign, mantissa, suffix)
+    if unitName is None:
+        result = "{}{}{}".format(sign, mantissa, suffix)
+    else:
+        result = "{}{} {}{}".format(sign, mantissa, suffix, unitName)
     return result
-
-
-def roundToPrec(val, prec):
-    # We're not rounding integers anyway
-    # Also make sure that we do not ask to calculate logarithm of zero
-    if int(val) == val:
-        return int(val)
-    # Find round factor, taking into consideration that we want to keep at least prec
-    # positions for fractions with zero integer part (e.g. 0.0000354 for prec=3)
-    roundFactor = int(prec - math.ceil(math.log10(abs(val))))
-    # But we don't want to round integers
-    if roundFactor < 0:
-        roundFactor = 0
-    # Do actual rounding
-    val = round(val, roundFactor)
-    # Make sure numbers with .0 part designating float don't get through
-    if int(val) == val:
-        val = int(val)
-    return val

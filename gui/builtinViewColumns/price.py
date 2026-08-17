@@ -22,10 +22,25 @@ import wx
 
 from eos.saveddata.cargo import Cargo
 from eos.saveddata.drone import Drone
-from service.price import Price as ServicePrice
-from gui.viewColumn import ViewColumn
+from eos.saveddata.fighter import Fighter
+from eos.saveddata.module import Module
+from eos.saveddata.price import PriceStatus
 from gui.bitmap_loader import BitmapLoader
 from gui.utils.numberFormatter import formatAmount
+from gui.viewColumn import ViewColumn
+from service.price import Price as ServicePrice
+
+
+def formatPrice(stuff, priceObj):
+    textItems = []
+    if priceObj.price:
+        mult = 1
+        if isinstance(stuff, (Drone, Fighter, Cargo)):
+            mult = stuff.amount
+        textItems.append(formatAmount(priceObj.price * mult, 3, 3, 9, currency=True))
+    if priceObj.status in (PriceStatus.fetchFail, PriceStatus.fetchTimeout):
+        textItems.append("(!)")
+    return " ".join(textItems)
 
 
 class Price(ViewColumn):
@@ -45,29 +60,26 @@ class Price(ViewColumn):
             if stuff.isEmpty:
                 return ""
 
-        price = stuff.item.price.price
-
-        if not price:
+        if isinstance(stuff, Module) and stuff.isMutated:
             return ""
 
-        if isinstance(stuff, Drone) or isinstance(stuff, Cargo):
-            price *= stuff.amount
+        priceObj = stuff.item.price
 
-        return formatAmount(price, 3, 3, 9, currency=True)
+        if not priceObj.isValid():
+            return False
+
+        return formatPrice(stuff, priceObj)
 
     def delayedText(self, mod, display, colItem):
         sPrice = ServicePrice.getInstance()
 
         def callback(item):
-            price = item.item.price
-            text = formatAmount(price.price, 3, 3, 9, currency=True) if price.price else ""
-            if price.failed:
-                text += " (!)"
-            colItem.SetText(text)
+            priceObj = item[0]
+            colItem.SetText(formatPrice(mod, priceObj))
 
             display.SetItem(colItem)
 
-        sPrice.getPrices([mod.item], callback, True)
+        sPrice.getPrices([mod.item], callback, waitforthread=True)
 
     def getImageId(self, mod):
         return -1

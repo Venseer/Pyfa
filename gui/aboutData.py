@@ -18,13 +18,20 @@
 # =============================================================================
 
 import config
+import wx
+_t = wx.GetTranslation
 
-versionString = "{0} {1} - {2} {3}".format(config.version, config.tag, config.expansionName, config.expansionVersion)
+try:
+    versionString = "{0}".format(config.getVersion())
+except NameError:
+    # is caught in case we run test and there are no config values initialized
+    versionString = "0.0"
+
 licenses = (
-    "pyfa is released under GNU GPLv3 - see included LICENSE file",
-    "All EVE-Online related materials are property of CCP hf.",
-    "Silk Icons Set by famfamfam.com - Creative Commons Attribution 2.5 License",
-    "Fat Cow Icons by fatcow.com - Creative Commons Attribution 3.0 License"
+    _t("pyfa is released under GNU GPLv3 - see included LICENSE file"),
+    _t("All EVE-Online related materials are property of CCP hf."),
+    _t("Silk Icons Set by famfamfam.com - Creative Commons Attribution 2.5 License"),
+    _t("Fat Cow Icons by fatcow.com - Creative Commons Attribution 3.0 License")
 )
 developers = (
     "blitzmann \tSable Blitzmann (maintainer)",
@@ -39,7 +46,7 @@ credits = (
     "Corollax (Aamrr) \tVarious EOS / pyfa improvements",
     "Dreae (Dreae)\tPyCrest")
 description = (
-    "Pyfa (the Python Fitting Assistant) is an open-source standalone application able to "
+    _t("Pyfa (the Python Fitting Assistant) is an open-source standalone application able to "
     "create and simulate fittings for EVE-Online SciFi MMORPG with a very high degree of "
-    "accuracy. Pyfa can run on all platforms where Python and wxWidgets are supported."
+    "accuracy. Pyfa can run on all platforms where Python and wxWidgets are supported.")
 )

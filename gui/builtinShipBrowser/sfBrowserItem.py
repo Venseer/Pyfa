@@ -1,6 +1,7 @@
 # noinspection PyPackageRequirements
 import wx
 import gui.utils.draw as drawUtils
+import gui.mainFrame
 
 SB_ITEM_NORMAL = 0
 SB_ITEM_SELECTED = 1
@@ -13,7 +14,7 @@ BTN_HOVER = 4
 BTN_DISABLED = 8
 
 
-class PFBaseButton(object):
+class PFBaseButton:
     def __init__(self, normalBitmap=wx.NullBitmap, label="", callback=None, hoverBitmap=None, disabledBitmap=None,
                  show=True):
 
@@ -84,7 +85,7 @@ class PFBaseButton(object):
         return self.dropShadowBmp
 
 
-class PFToolbar(object):
+class PFToolbar:
     def __init__(self, parent):
         self.Parent = parent
         self.buttons = []
@@ -232,8 +233,8 @@ class PFToolbar(object):
 
             bmpWidth = bmp.GetWidth()
 
-            pdc.DrawBitmap(dropShadowBmp, bx + self.padding / 2, self.toolbarY + self.padding / 2)
-            pdc.DrawBitmap(bmp, tbx, by)
+            pdc.DrawBitmap(dropShadowBmp, round(bx + self.padding / 2), round(self.toolbarY + self.padding / 2))
+            pdc.DrawBitmap(bmp, round(tbx), round(by))
 
             bx += bmpWidth + self.padding
 
@@ -245,6 +246,7 @@ class SFBrowserItem(wx.Window):
         self.highlighted = False
         self.selected = False
         self.bkBitmap = None
+        self.mainFrame = gui.mainFrame.MainFrame.getInstance()
 
         self.canBeDragged = False
 
@@ -311,6 +313,10 @@ class SFBrowserItem(wx.Window):
         self.canBeDragged = mode
 
     def OnLeftUp(self, event):
+        if self.mainFrame.supress_left_up:
+            wx.Yield()
+            self.mainFrame.supress_left_up = False
+            return
 
         if self.HasCapture():
             self.ReleaseMouse()

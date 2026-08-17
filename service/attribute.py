@@ -20,7 +20,7 @@
 import eos.db
 
 
-class Attribute(object):
+class Attribute:
     instance = None
 
     @classmethod
@@ -33,10 +33,10 @@ class Attribute(object):
     @staticmethod
     def getAttributeInfo(identity):
         if isinstance(identity, (int, str)):
-            info = eos.db.getAttributeInfo(identity, eager=("unit"))
+            info = eos.db.getAttributeInfo(identity, eager="unit")
         elif isinstance(identity, (int, float)):
             id_ = int(identity)
-            info = eos.db.getAttributeInfo(id_, eager=("unit"))
+            info = eos.db.getAttributeInfo(id_, eager="unit")
         else:
             info = None
         return info

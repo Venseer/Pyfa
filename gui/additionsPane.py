@@ -20,6 +20,7 @@
 # noinspection PyPackageRequirements
 import wx
 
+import gui.globalEvents as GE
 from gui.bitmap_loader import BitmapLoader
 from gui.builtinAdditionPanes.boosterView import BoosterView
 from gui.builtinAdditionPanes.cargoView import CargoView
@@ -32,19 +33,22 @@ from gui.builtinAdditionPanes.projectedView import ProjectedView
 from gui.chrome_tabs import ChromeNotebook
 from gui.toggle_panel import TogglePanel
 
+_t = wx.GetTranslation
 
 class AdditionsPane(TogglePanel):
-    def __init__(self, parent):
+
+    def __init__(self, parent, mainFrame):
 
         TogglePanel.__init__(self, parent, force_layout=1)
+        self.mainFrame = mainFrame
 
-        self.SetLabel("Additions")
+        self.SetLabel(_t("Additions"))
         pane = self.GetContentPanel()
 
         baseSizer = wx.BoxSizer(wx.HORIZONTAL)
         pane.SetSizer(baseSizer)
 
-        self.notebook = ChromeNotebook(pane, False)
+        self.notebook = ChromeNotebook(pane, can_add=False, tabWidthMode=1)
         self.notebook.SetMinSize((-1, 1000))
 
         baseSizer.Add(self.notebook, 1, wx.EXPAND)
@@ -59,35 +63,38 @@ class AdditionsPane(TogglePanel):
         notesImg = BitmapLoader.getImage("skill_small", "gui")
 
         self.drone = DroneView(self.notebook)
-        self.notebook.AddPage(self.drone, "Drones", image=droneImg, closeable=False)
+        self.notebook.AddPage(self.drone, _t("Drones"), image=droneImg, closeable=False)
 
         self.fighter = FighterView(self.notebook)
-        self.notebook.AddPage(self.fighter, "Fighters", image=fighterImg, closeable=False)
+        self.notebook.AddPage(self.fighter, _t("Fighters"), image=fighterImg, closeable=False)
 
         self.cargo = CargoView(self.notebook)
-        self.notebook.AddPage(self.cargo, "Cargo", image=cargoImg, closeable=False)
+        self.notebook.AddPage(self.cargo, _t("Cargo"), image=cargoImg, closeable=False)
 
         self.implant = ImplantView(self.notebook)
-        self.notebook.AddPage(self.implant, "Implants", image=implantImg, closeable=False)
+        self.notebook.AddPage(self.implant, _t("Implants"), image=implantImg, closeable=False)
 
         self.booster = BoosterView(self.notebook)
-        self.notebook.AddPage(self.booster, "Boosters", image=boosterImg, closeable=False)
+        self.notebook.AddPage(self.booster, _t("Boosters"), image=boosterImg, closeable=False)
 
         self.projectedPage = ProjectedView(self.notebook)
-        self.notebook.AddPage(self.projectedPage, "Projected", image=projectedImg, closeable=False)
+        self.notebook.AddPage(self.projectedPage, _t("Projected"), image=projectedImg, closeable=False)
 
         self.gangPage = CommandView(self.notebook)
-        self.notebook.AddPage(self.gangPage, "Command", image=gangImg, closeable=False)
+        self.notebook.AddPage(self.gangPage, _t("Command"), image=gangImg, closeable=False)
 
         self.notes = NotesView(self.notebook)
-        self.notebook.AddPage(self.notes, "Notes", image=notesImg, closeable=False)
+        self.notebook.AddPage(self.notes, _t("Notes"), image=notesImg, closeable=False)
+
+        self.mainFrame.Bind(GE.FIT_CHANGED, self.OnFitChanged)
+        self.mainFrame.Bind(GE.FIT_NOTES_CHANGED, self.OnNotesChanged)
 
         self.notebook.SetSelection(0)
 
     PANES = ["Drones", "Fighters", "Cargo", "Implants", "Boosters", "Projected", "Command", "Notes"]
 
-    def select(self, name):
-        self.notebook.SetSelection(self.PANES.index(name))
+    def select(self, name, focus=True):
+        self.notebook.SetSelection(self.PANES.index(name), focus=focus)
 
     def getName(self, idx):
         return self.PANES[idx]
@@ -105,3 +112,25 @@ class AdditionsPane(TogglePanel):
             self.parent.SetSashInvisible(False)
             self.parent.SetMinimumPaneSize(200)
             self.parent.SetSashPosition(self.old_pos, True)
+
+    def OnFitChanged(self, event):
+        event.Skip()
+        activeFitID = self.mainFrame.getActiveFit()
+        if activeFitID is not None and activeFitID not in event.fitIDs:
+            return
+        self.updateExtraText()
+
+    def OnNotesChanged(self, event):
+        event.Skip()
+        self.updateExtraText()
+
+    def updateExtraText(self):
+        refresh = False
+        for i in range(self.notebook.GetPageCount()):
+            page = self.notebook.GetPage(i)
+            if hasattr(page, 'getTabExtraText'):
+                refresh = True
+                self.notebook.SetPageTitleExtra(i, page.getTabExtraText() or '', refresh=False)
+        if refresh:
+            self.notebook.tabs_container.AdjustTabsSize()
+            self.notebook.Refresh()

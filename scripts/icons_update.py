@@ -6,19 +6,25 @@ This script updates only market/item icons.
 
 
 import argparse
-import os
-import re
-import sqlite3
 import json
+import os
+import sqlite3
+from shutil import copyfile
 
 from PIL import Image
 
-from shutil import copyfile
+
+def get_full_alias(short_alias):
+    full_aliases = {
+        'tq': 'tranquility',
+        'sisi': 'singularity'}
+    return full_aliases.get(short_alias, short_alias)
+
 
 parser = argparse.ArgumentParser(description='This script updates module icons for pyfa')
-parser.add_argument('-e', '--eve', required=True, type=str, help='path to eve\'s ')
+parser.add_argument('-e', '--eve', required=True, type=str, help='path to eve\'s shared cache folder')
 parser.add_argument('-s', '--server', required=False, default='tq', type=str, help='which server to use (defaults to tq)')
-parser.add_argument('-i', '--icons', required=True, type=str, help='Path to icons .json')
+parser.add_argument('-i', '--icons', required=True, type=str, help='Path to iconids.json extracted by phobos')
 args = parser.parse_args()
 
 
@@ -36,7 +42,7 @@ RENDER_SIZE = (32, 32)
 with open(args.icons, 'r') as f:
     icon_json = json.load(f)
 
-eve_path = os.path.join(args.eve, 'index_{}.txt'.format(args.server))
+eve_path = os.path.join(args.eve, 'index_{}.txt'.format(get_full_alias(args.server)))
 with open(eve_path, 'r') as f:
     lines = f.readlines()
     file_index = {x.split(',')[0]: x.split(',') for x in lines}
@@ -50,7 +56,7 @@ with open(os.path.join(res_cache, resfileindex[1]), 'r') as f:
     res_index = {x.split(',')[0].lower(): x.split(',') for x in lines}
 
 # Need to copy the file to  our cuirrent directory
-graphics_loader_file = os.path.join(res_cache, file_index['app:/bin/graphicIDsLoader.pyd'][1])
+graphics_loader_file = os.path.join(res_cache, file_index['app:/bin64/graphicIDsLoader.pyd'][1])
 to_path = os.path.dirname(os.path.abspath(__file__))
 copyfile(graphics_loader_file, os.path.join(os.path.dirname(os.path.abspath(__file__)), 'graphicIDsLoader.pyd'))
 
@@ -61,14 +67,12 @@ copyfile(graphics_file, os.path.join(os.path.dirname(os.path.abspath(__file__)),
 
 import graphicIDsLoader
 
-print(dir(graphicIDsLoader))
-
 graphics = graphicIDsLoader.load(os.path.join(to_path, 'graphicIDs.fsdbinary'))
 
 graphics_py_ob = {}
 for x, v in graphics.items():
-    if (hasattr(v, 'iconFolder')):
-        graphics_py_ob[x] = v.iconFolder
+    if hasattr(v, 'iconInfo') and hasattr(v.iconInfo, 'folder'):
+        graphics_py_ob[x] = v.iconInfo.folder
 
 # Add children to market group list
 # {parent: {children}}
@@ -91,7 +95,7 @@ def get_children(parent):
     return children
 
 
-query_items = 'select distinct iconID from invtypes'
+query_items = 'select distinct it.iconID from invtypes as it inner join invgroups as ig on it.groupID = ig.groupID where ig.categoryID != 2118'
 query_groups = 'select distinct iconID from invgroups'
 query_cats = 'select distinct iconID from invcategories'
 query_market = 'select distinct iconID from invmarketgroups'
@@ -141,6 +145,9 @@ def get_icon_file(res_path, size):
     icon for it. Return as PIL image object down-
     scaled for use in pyfa.
     """
+    res_path = res_path.lower()
+    res_path = res_path.replace('\\', '/')
+    res_path = res_path.replace('//', '/')  #1703
     if res_path not in res_index:
         return None
     res_icon = res_index[res_path]
@@ -151,6 +158,11 @@ def get_icon_file(res_path, size):
     if not os.path.isfile(fullpath):
         return None
     img = Image.open(fullpath)
+
+    if size > img.size:
+        # if we are requesting a size that is bigger than the source, return None. See #1769
+        return None
+
     img = crop_image(img)
     img.thumbnail(size, Image.ANTIALIAS)
 
@@ -192,21 +204,25 @@ if toadd:
     print(('Adding {} icons...'.format(len(toadd))))
     missing = set()
     for fname in sorted(toadd):
-        icon = icon_json[str(fname)]
-        key = icon['iconFile'].lower()
-        icon = get_icon_file(key, ICON_SIZE)
+        icon = icon_json.get(str(fname), None)
         if icon is None:
-            missing.add(fname)
+            print("Can't find iconID {}".format(fname))
             continue
-        fullname = '{}.png'.format(fname)
-        fullpath = os.path.join(icons_dir, fullname)
-        icon.save(fullpath, 'png')
+        key = icon['iconFile'].lower()
+
+        for i in range(2):
+            scale = i+1
+            icon = get_icon_file(key, tuple([x*scale for x in ICON_SIZE]))
+            if icon is None:
+                missing.add(fname)
+                continue
+            fullname = '{}@{}x.png'.format(fname, scale)
+            fullpath = os.path.join(icons_dir, fullname)
+            icon.save(fullpath, 'png')
     if missing:
         print(('  {} icons are missing in export:'.format(len(missing))))
         for fname in sorted(missing):
             print(('    {}'.format(fname)))
-
-print(missing)
 
 print("Doing renders")
 
@@ -222,19 +238,26 @@ toupdate = existing.intersection(needed)
 toadd = needed.difference(existing)
 
 if toadd:
-    print(('Adding {} icons...'.format(len(toadd))))
+    print(('Adding {} renders...'.format(len(toadd))))
     missing = set()
     for fname in sorted(toadd):
-        icon = graphics_py_ob[int(fname)]
-        icon = "{}/{}_64.png".format(icon, fname)
-        icon = get_icon_file(icon, RENDER_SIZE)
-        if icon is None:
-            missing.add(fname)
-            continue
-        fullname = '{}.png'.format(fname)
-        fullpath = os.path.join(render_dir, fullname)
-        icon.save(fullpath, 'png')
+        try:
+            key = graphics_py_ob[int(fname)]
+        except KeyError:
+            print("Can't find graphicID {}".format(fname))
+
+        key = "{}/{}_64.png".format(key, fname)
+
+        for i in range(2):
+            scale = i+1
+            icon = get_icon_file(key, tuple([x*scale for x in RENDER_SIZE]))
+            if icon is None:
+                missing.add(fname)
+                continue
+            fullname = '{}@{}x.png'.format(fname, scale)
+            fullpath = os.path.join(render_dir, fullname)
+            icon.save(fullpath, 'png')
     if missing:
-        print(('  {} icons are missing in export:'.format(len(missing))))
+        print(('  {} renders are missing in export:'.format(len(missing))))
         for fname in sorted(missing):
             print(('    {}'.format(fname)))

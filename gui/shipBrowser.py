@@ -1,7 +1,6 @@
 # noinspection PyPackageRequirements
 import wx
 from logbook import Logger
-# noinspection PyPackageRequirements
 
 import gui.globalEvents as GE
 import gui.mainFrame
@@ -97,11 +96,14 @@ class ShipBrowser(wx.Panel):
         self.navpanel.gotoStage(stage, stageData)
 
     def RefreshList(self, event):
-        stage = self.GetActiveStage()
+        event.Skip()
+        activeFitID = self.mainFrame.getActiveFit()
+        if activeFitID is not None and activeFitID not in event.fitIDs:
+            return
 
+        stage = self.GetActiveStage()
         if stage in (3, 4, 5):
             self.lpane.RefreshList(True)
-        event.Skip()
 
     def SizeRefreshList(self, event):
         self.Layout()
@@ -162,19 +164,19 @@ class ShipBrowser(wx.Panel):
         if len(self.categoryList) == 0:
             # set cache of category list
             self.categoryList = list(sMkt.getShipRoot())
-            self.categoryList.sort(key=lambda _ship: _ship.name)
+            self.categoryList.sort(key=lambda _ship: _ship.displayName)
+
+            counts = sFit.countAllFitsGroupedByShip()
 
             # set map & cache of fittings per category
             for cat in self.categoryList:
-                itemIDs = [x.ID for x in cat.items]
-                num = sFit.countFitsWithShip(itemIDs)
-                self.categoryFitCache[cat.ID] = num > 0
-
+                itemIDs = [x.ID for x in sMkt.getItemsByGroup(cat)]
+                self.categoryFitCache[cat.ID] = sum([count for shipID, count in counts if shipID in itemIDs]) > 0
         for ship in self.categoryList:
             if self.filterShipsWithNoFits and not self.categoryFitCache[ship.ID]:
                 continue
             else:
-                self.lpane.AddWidget(CategoryItem(self.lpane, ship.ID, (ship.name, 0)))
+                self.lpane.AddWidget(CategoryItem(self.lpane, ship.ID, (ship.displayName, 0)))
 
         self.navpanel.ShowSwitchEmptyGroupsButton(True)
 
@@ -187,9 +189,9 @@ class ShipBrowser(wx.Panel):
 
     RACE_ORDER = [
         "amarr", "caldari", "gallente", "minmatar",
-        "sisters", "ore",
+        "sisters", "ore", "concord",
         "serpentis", "angel", "blood", "sansha", "guristas", "mordu",
-        "jove", "upwell", "triglavian", None
+        "deathless", "jove", "triglavian", "upwell", None
     ]
 
     def raceNameKey(self, ship):
@@ -231,7 +233,7 @@ class ShipBrowser(wx.Panel):
             if override:
                 filter_ = True
 
-            shipTrait = ship.traits.traitText if (ship.traits is not None) else ""  # empty string if no traits
+            shipTrait = ship.traits.display if (ship.traits is not None) else ""  # empty string if no traits
 
             if self.filterShipsWithNoFits:
                 if fits > 0:
@@ -333,7 +335,7 @@ class ShipBrowser(wx.Panel):
         self._stage3ShipName = shipName
         self._stage3Data = shipID
 
-        shipTrait = ship.traits.traitText if (ship.traits is not None) else ""  # empty string if no traits
+        shipTrait = ship.traits.display if (ship.traits is not None) else ""  # empty string if no traits
 
         for ID, name, booster, timestamp, notes, graphicID in fitList:
             self.lpane.AddWidget(FitItem(self.lpane, ID, (shipName, shipTrait, name, booster, timestamp, notes), shipID, graphicID=graphicID))
@@ -370,7 +372,7 @@ class ShipBrowser(wx.Panel):
             fitList = sFit.searchFits(query)
 
             for ship in ships:
-                shipTrait = ship.traits.traitText if (ship.traits is not None) else ""  # empty string if no traits
+                shipTrait = ship.traits.display if (ship.traits is not None) else ""  # empty string if no traits
 
                 self.lpane.AddWidget(
                     ShipItem(self.lpane, ship.ID, (ship.name, shipTrait, len(sFit.getFitsWithShip(ship.ID))),
@@ -382,7 +384,7 @@ class ShipBrowser(wx.Panel):
                 if not sMkt.getPublicityByItem(ship):
                     continue
 
-                shipTrait = ship.traits.traitText if (ship.traits is not None) else ""  # empty string if no traits
+                shipTrait = ship.traits.display if (ship.traits is not None) else ""  # empty string if no traits
 
                 self.lpane.AddWidget(FitItem(self.lpane, ID, (shipName, shipTrait, name, booster, timestamp, notes), shipID, graphicID=ship.graphicID))
             if len(ships) == 0 and len(fitList) == 0:
@@ -421,7 +423,7 @@ class ShipBrowser(wx.Panel):
         if fits:
             for fit in fits:
                 shipItem = fit[3]
-                shipTrait = shipItem.traits.traitText if (shipItem.traits is not None) else ""
+                shipTrait = shipItem.traits.display if (shipItem.traits is not None) else ""
 
                 self.lpane.AddWidget(FitItem(
                     self.lpane,

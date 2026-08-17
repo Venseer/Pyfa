@@ -25,6 +25,7 @@ from gui.bitmap_loader import BitmapLoader
 from gui.utils.numberFormatter import formatAmount
 from service.fit import Fit
 
+_t = wx.GetTranslation
 
 class MiningYieldViewFull(StatsView):
     name = "miningyieldViewFull"
@@ -35,7 +36,7 @@ class MiningYieldViewFull(StatsView):
         self._cachedValues = []
 
     def getHeaderText(self, fit):
-        return "Mining Yield"
+        return _t("Mining Yield")
 
     def getTextExtentW(self, text):
         width, height = self.parent.GetTextExtent(text)
@@ -64,7 +65,7 @@ class MiningYieldViewFull(StatsView):
             box = wx.BoxSizer(wx.VERTICAL)
             baseBox.Add(box, 0, wx.ALIGN_CENTER)
 
-            box.Add(wx.StaticText(parent, wx.ID_ANY, miningType.capitalize()), 0, wx.ALIGN_LEFT)
+            box.Add(wx.StaticText(parent, wx.ID_ANY, _t(miningType).capitalize()), 0, wx.ALIGN_LEFT)
 
             hbox = wx.BoxSizer(wx.HORIZONTAL)
             box.Add(hbox, 1, wx.ALIGN_CENTER)
@@ -85,7 +86,7 @@ class MiningYieldViewFull(StatsView):
         box = wx.BoxSizer(wx.VERTICAL)
         baseBox.Add(box, 0, wx.EXPAND)
 
-        box.Add(wx.StaticText(parent, wx.ID_ANY, "Total"), 0, wx.ALIGN_LEFT)
+        box.Add(wx.StaticText(parent, wx.ID_ANY, _t("Total")), 0, wx.ALIGN_LEFT)
 
         hbox = wx.BoxSizer(wx.HORIZONTAL)
         box.Add(hbox, 1, wx.EXPAND)
@@ -98,7 +99,7 @@ class MiningYieldViewFull(StatsView):
 
         image = BitmapLoader.getBitmap("turret_small", "gui")
         firepower = wx.BitmapButton(contentPanel, -1, image)
-        firepower.SetToolTip(wx.ToolTip("Click to toggle to Firepower View"))
+        firepower.SetToolTip(wx.ToolTip(_t("Click to toggle to Firepower View")))
         firepower.Bind(wx.EVT_BUTTON, self.switchToFirepowerView)
         sizerMiningYield.Add(firepower, 0, wx.ALIGN_LEFT)
 
@@ -123,28 +124,42 @@ class MiningYieldViewFull(StatsView):
         # Get the TogglePanel
         tp = self.panel.GetParent()
         # Bind the new panel's children to allow context menu access
-        self.parent.applyBinding(self.parent, tp.content_panel)
         tp.SetLabel(view.getHeaderText(fit))
         view.refreshPanel(fit)
 
     def refreshPanel(self, fit):
         # If we did anything intresting, we'd update our labels to reflect the new fit's stats here
 
-        stats = (("labelFullminingyieldMiner", lambda: fit.minerYield, 3, 0, 0, "%s m\u00B3/s", None),
-                 ("labelFullminingyieldDrone", lambda: fit.droneYield, 3, 0, 0, "%s m\u00B3/s", None),
-                 ("labelFullminingyieldTotal", lambda: fit.totalYield, 3, 0, 0, "%s m\u00B3/s", None))
+        stats = (("labelFullminingyieldMiner", lambda: fit.minerYield, lambda: fit.minerDrain, 3, 0, 0, "{} m\u00B3/s", None),
+                 ("labelFullminingyieldDrone", lambda: fit.droneYield, lambda: fit.droneDrain, 3, 0, 0, "{} m\u00B3/s", None),
+                 ("labelFullminingyieldTotal", lambda: fit.totalYield, lambda: fit.totalDrain, 3, 0, 0, "{} m\u00B3/s", None))
 
-        counter = 0
-        for labelName, value, prec, lowest, highest, valueFormat, altFormat in stats:
-            label = getattr(self, labelName)
+        def processValue(value):
             value = value() if fit is not None else 0
             value = value if value is not None else 0
-            if self._cachedValues[counter] != value:
-                valueStr = formatAmount(value, prec, lowest, highest)
-                label.SetLabel(valueFormat % valueStr)
-                tipStr = "Mining Yield per second ({0} per hour)".format(formatAmount(value * 3600, 3, 0, 3))
-                label.SetToolTip(wx.ToolTip(tipStr))
-                self._cachedValues[counter] = value
+            return value
+
+        counter = 0
+        for labelName, yieldValue, drainValue, prec, lowest, highest, valueFormat, altFormat in stats:
+            label = getattr(self, labelName)
+            yieldValue = processValue(yieldValue)
+            drainValue = processValue(drainValue)
+            if self._cachedValues[counter] != (yieldValue, drainValue):
+                try:
+                    efficiency = '{}%'.format(formatAmount(yieldValue / drainValue * 100, 4, 0, 0))
+                except ZeroDivisionError:
+                    efficiency = '0%'
+                yps = formatAmount(yieldValue, prec, lowest, highest)
+                yph = formatAmount(yieldValue * 3600, prec, lowest, highest)
+                dps = formatAmount(drainValue, prec, lowest, highest)
+                dph = formatAmount(drainValue * 3600, prec, lowest, highest)
+                label.SetLabel(valueFormat.format(yps))
+                tipLines = []
+                tipLines.append("{} m\u00B3 yield per second ({} m\u00B3 per hour)".format(yps, yph))
+                tipLines.append("{} m\u00B3 drain per second ({} m\u00B3 per hour)".format(dps, dph))
+                tipLines.append(f'{efficiency} efficiency')
+                label.SetToolTip(wx.ToolTip('\n'.join(tipLines)))
+                self._cachedValues[counter] = (yieldValue, drainValue)
             counter += 1
         self.panel.Layout()
         self.headerPanel.Layout()

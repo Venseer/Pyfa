@@ -2,23 +2,25 @@
 
 import re
 import time
-import config
 
 import wx
 from logbook import Logger
 
+import config
 import gui.builtinShipBrowser.sfBrowserItem as SFItem
-import gui.globalEvents as GE
+import gui.fitCommands as cmd
 import gui.mainFrame
+import gui.globalEvents as GE
 import gui.utils.color as colorUtils
 import gui.utils.draw as drawUtils
 import gui.utils.fonts as fonts
-from .events import ImportSelected, SearchSelected, FitSelected, BoosterListUpdated, Stage3Selected, FitRenamed, FitRemoved
 from gui.bitmap_loader import BitmapLoader
 from gui.builtinShipBrowser.pfBitmapFrame import PFBitmapFrame
 from service.fit import Fit
+from .events import BoosterListUpdated, FitSelected, ImportSelected, SearchSelected, Stage3Selected
 
 pyfalog = Logger(__name__)
+_t = wx.GetTranslation
 
 
 class FitItem(SFItem.SFBrowserItem):
@@ -102,9 +104,9 @@ class FitItem(SFItem.SFBrowserItem):
         self.SetDraggable()
 
         self.boosterBtn = self.toolbar.AddButton(self.boosterBmp, "Booster", show=self.fitBooster)
-        self.toolbar.AddButton(self.copyBmp, "Copy", self.copyBtnCB)
-        self.renameBtn = self.toolbar.AddButton(self.renameBmp, "Rename", self.renameBtnCB)
-        self.toolbar.AddButton(self.deleteBmp, "Delete", self.deleteBtnCB)
+        self.toolbar.AddButton(self.copyBmp, _t("Copy"), self.copyBtnCB)
+        self.renameBtn = self.toolbar.AddButton(self.renameBmp, _t("Rename"), self.renameBtnCB)
+        self.toolbar.AddButton(self.deleteBmp, _t("Delete"), self.deleteBtnCB)
 
         self.tcFitName = wx.TextCtrl(self, wx.ID_ANY, "%s" % self.fitName, wx.DefaultPosition, (self.editWidth, -1),
                                      wx.TE_PROCESS_ENTER)
@@ -121,6 +123,7 @@ class FitItem(SFItem.SFBrowserItem):
         self.tcFitName.Bind(wx.EVT_KILL_FOCUS, self.editLostFocus)
         self.tcFitName.Bind(wx.EVT_KEY_DOWN, self.editCheckEsc)
         self.Bind(wx.EVT_MOUSE_CAPTURE_LOST, self.OnMouseCaptureLost)
+        self.mainFrame.Bind(GE.FIT_RENAMED, self.OnFitRename)
 
         self.animTimerId = wx.NewId()
         self.animTimer = wx.Timer(self, self.animTimerId)
@@ -169,32 +172,21 @@ class FitItem(SFItem.SFBrowserItem):
     def OpenNewTab(self, evt):
         self.selectFit(newTab=True)
 
-    def OnToggleBooster(self, event):
-        sFit = Fit.getInstance()
-        sFit.toggleBoostFit(self.fitID)
-        self.fitBooster = not self.fitBooster
-        self.boosterBtn.Show(self.fitBooster)
-        self.Refresh()
-        wx.PostEvent(self.mainFrame, BoosterListUpdated())
-        event.Skip()
 
     def OnProjectToFit(self, event):
         activeFit = self.mainFrame.getActiveFit()
         if activeFit:
             sFit = Fit.getInstance()
             projectedFit = sFit.getFit(self.fitID)
-            sFit.project(activeFit, projectedFit)
-            wx.PostEvent(self.mainFrame, GE.FitChanged(fitID=activeFit))
-            self.mainFrame.additionsPane.select("Projected")
+            command = cmd.GuiAddProjectedFitsCommand(fitID=activeFit, projectedFitIDs=[projectedFit.ID], amount=1)
+            if self.mainFrame.command.Submit(command):
+                self.mainFrame.additionsPane.select("Projected")
 
     def OnAddCommandFit(self, event):
         activeFit = self.mainFrame.getActiveFit()
         if activeFit:
-            sFit = Fit.getInstance()
-            commandFit = sFit.getFit(self.fitID)
-            sFit.addCommandFit(activeFit, commandFit)
-            wx.PostEvent(self.mainFrame, GE.FitChanged(fitID=activeFit))
-            self.mainFrame.additionsPane.select("Command")
+            if self.mainFrame.command.Submit(cmd.GuiAddCommandFitsCommand(fitID=activeFit, commandFitIDs=[self.fitID])):
+                self.mainFrame.additionsPane.select("Command")
 
     def OnMouseCaptureLost(self, event):
         """ Destroy drag information (GH issue #479)"""
@@ -232,13 +224,13 @@ class FitItem(SFItem.SFBrowserItem):
         #     menu.AppendSubMenu(boosterMenu, 'Set Booster')
 
         if fit:
-            newTabItem = menu.Append(wx.ID_ANY, "Open in new tab")
+            newTabItem = menu.Append(wx.ID_ANY, _t("Open in new tab"))
             self.Bind(wx.EVT_MENU, self.OpenNewTab, newTabItem)
 
-            projectedItem = menu.Append(wx.ID_ANY, "Project onto Active Fit")
+            projectedItem = menu.Append(wx.ID_ANY, _t("Project onto Active Fit"))
             self.Bind(wx.EVT_MENU, self.OnProjectToFit, projectedItem)
 
-            commandItem = menu.Append(wx.ID_ANY, "Add Command Booster")
+            commandItem = menu.Append(wx.ID_ANY, _t("Add Command Booster"))
             self.Bind(wx.EVT_MENU, self.OnAddCommandFit, commandItem)
 
         self.PopupMenu(menu, pos)
@@ -292,7 +284,7 @@ class FitItem(SFItem.SFBrowserItem):
         event.Skip()
 
     def editCheckEsc(self, event):
-        if event.GetKeyCode() == wx.WXK_ESCAPE:
+        if event.GetKeyCode() == wx.WXK_ESCAPE and event.GetModifiers() == wx.MOD_NONE:
             self.RestoreEditButton()
         else:
             event.Skip()
@@ -325,16 +317,21 @@ class FitItem(SFItem.SFBrowserItem):
             self.Refresh()
 
     def renameFit(self, event=None):
-        sFit = Fit.getInstance()
         self.tcFitName.Show(False)
         self.editWasShown = 0
         fitName = self.tcFitName.GetValue()
         if fitName:
-            self.fitName = fitName
-            sFit.renameFit(self.fitID, self.fitName)
-            wx.PostEvent(self.mainFrame, FitRenamed(fitID=self.fitID))
+            self.mainFrame.command.Submit(cmd.GuiRenameFitCommand(self.fitID, fitName))
         else:
             self.tcFitName.SetValue(self.fitName)
+
+    def OnFitRename(self, event):
+        if event.fitID == self.fitID:
+            fit = Fit.getInstance().getFit(self.fitID)
+            self.fitName = fit.name
+            if self:
+                self.Refresh()
+        event.Skip()
 
     def deleteBtnCB(self):
         if self.tcFitName.IsShown():
@@ -342,18 +339,16 @@ class FitItem(SFItem.SFBrowserItem):
             return
 
         # to prevent accidental deletion, give dialog confirmation unless shift is depressed
-        if wx.GetMouseState().ShiftDown() or wx.GetMouseState().MiddleIsDown():
+        mstate = wx.GetMouseState()
+        if mstate.GetModifiers() == wx.MOD_SHIFT or mstate.MiddleIsDown():
             self.deleteFit()
         else:
-            dlg = wx.MessageDialog(
-                self,
-                "Do you really want to delete this fit?",
-                "Confirm Delete",
+            with wx.MessageDialog(
+                self.GetTopLevelParent(), "Do you really want to delete this fit?", "Confirm Delete",
                 wx.YES | wx.NO | wx.ICON_QUESTION
-            )
-
-            if dlg.ShowModal() == wx.ID_YES:
-                self.deleteFit()
+            ) as dlg:
+                if dlg.ShowModal() == wx.ID_YES:
+                    self.deleteFit()
 
     def deleteFit(self, event=None):
         pyfalog.debug("Deleting ship fit.")
@@ -372,9 +367,8 @@ class FitItem(SFItem.SFBrowserItem):
                     break
 
         sFit.deleteFit(self.fitID)
-
         # Notify other areas that a fit has been deleted
-        wx.PostEvent(self.mainFrame, FitRemoved(fitID=self.fitID))
+        wx.PostEvent(self.mainFrame, GE.FitRemoved(fitID=self.fitID))
 
         # todo: would a simple RefreshList() work here instead of posting that a stage has been selected?
         if self.shipBrowser.GetActiveStage() == 5:
@@ -422,9 +416,18 @@ class FitItem(SFItem.SFBrowserItem):
         if self.dragging:
             if not self.dragged:
                 if self.dragMotionTrigger < 0:
+                    if not self.dragTLFBmp:
+                        tdc = wx.MemoryDC()
+                        bmpWidth = self.toolbarx if self.toolbarx < 200 else 200
+                        self.dragTLFBmp = wx.Bitmap(round(bmpWidth), round(self.GetRect().height))
+                        tdc.SelectObject(self.dragTLFBmp)
+                        tdc.SetBrush(wx.Brush(wx.SystemSettings.GetColour(wx.SYS_COLOUR_WINDOW)))
+                        tdc.DrawRectangle(0, 0, bmpWidth, self.GetRect().height)
+                        self.DrawItem(tdc)
+                        tdc.SelectObject(wx.NullBitmap)
                     if not self.HasCapture():
                         self.CaptureMouse()
-                    self.dragWindow = PFBitmapFrame(self, pos, self.dragTLFBmp)
+                    self.dragWindow = PFBitmapFrame(self, pos, self.dragTLFBmp)  
                     self.dragWindow.Show()
                     self.dragged = True
                     self.dragMotionTrigger = self.dragMotionTrail
@@ -499,9 +502,9 @@ class FitItem(SFItem.SFBrowserItem):
         else:
             shipEffBk = self.shipEffBk
 
-        mdc.DrawBitmap(shipEffBk, self.shipEffx, self.shipEffy, 0)
+        mdc.DrawBitmap(shipEffBk, round(self.shipEffx), round(self.shipEffy), 0)
 
-        mdc.DrawBitmap(self.shipBmp, self.shipBmpx, self.shipBmpy, 0)
+        mdc.DrawBitmap(self.shipBmp, round(self.shipBmpx), round(self.shipBmpy), 0)
 
         mdc.SetFont(self.fontNormal)
 
@@ -510,26 +513,21 @@ class FitItem(SFItem.SFBrowserItem):
         pfdate = drawUtils.GetPartialText(mdc, fitLocalDate,
                                           self.toolbarx - self.textStartx - self.padding * 2 - self.thoverw)
 
-        mdc.DrawText(pfdate, self.textStartx, self.timestampy)
+        mdc.DrawText(pfdate, round(self.textStartx), round(self.timestampy))
 
         mdc.SetFont(self.fontSmall)
-        mdc.DrawText(self.toolbar.hoverLabel, self.thoverx, self.thovery)
+        mdc.DrawText(self.toolbar.hoverLabel, round(self.thoverx), round(self.thovery))
 
         mdc.SetFont(self.fontBig)
 
         psname = drawUtils.GetPartialText(mdc, self.fitName,
                                           self.toolbarx - self.textStartx - self.padding * 2 - self.thoverw)
 
-        mdc.DrawText(psname, self.textStartx, self.fitNamey)
+        mdc.DrawText(psname, round(self.textStartx), round(self.fitNamey))
 
         if self.tcFitName.IsShown():
             self.AdjustControlSizePos(self.tcFitName, self.textStartx, self.toolbarx - self.editWidth - self.padding)
 
-        tdc = wx.MemoryDC()
-        self.dragTLFBmp = wx.Bitmap((self.toolbarx if self.toolbarx < 200 else 200), rect.height, 24)
-        tdc.SelectObject(self.dragTLFBmp)
-        tdc.Blit(0, 0, (self.toolbarx if self.toolbarx < 200 else 200), rect.height, mdc, 0, 0, wx.COPY)
-        tdc.SelectObject(wx.NullBitmap)
 
     def AdjustControlSizePos(self, editCtl, start, end):
         fnEditSize = editCtl.GetSize()

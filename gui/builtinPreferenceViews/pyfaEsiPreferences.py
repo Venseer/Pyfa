@@ -1,24 +1,21 @@
 # noinspection PyPackageRequirements
 import wx
 
-from gui.preferenceView import PreferenceView
-from gui.bitmap_loader import BitmapLoader
-
+import config
 import gui.mainFrame
-
+from gui.bitmap_loader import BitmapLoader
+from gui.preferenceView import PreferenceView
+from service.esi import Esi
 from service.settings import EsiSettings
 
 # noinspection PyPackageRequirements
-from wx.lib.intctrl import IntCtrl
-
-from service.esi import Esi
+_t = wx.GetTranslation
 
 
 class PFEsiPref(PreferenceView):
-    title = "EVE SSO"
 
     def populatePanel(self, panel):
-
+        self.title = _t("EVE SSO")
         self.mainFrame = gui.mainFrame.MainFrame.getInstance()
         self.settings = EsiSettings.getInstance()
         self.dirtySettings = False
@@ -28,167 +25,83 @@ class PFEsiPref(PreferenceView):
         self.stTitle = wx.StaticText(panel, wx.ID_ANY, self.title, wx.DefaultPosition, wx.DefaultSize, 0)
         self.stTitle.Wrap(-1)
         self.stTitle.SetFont(wx.Font(12, 70, 90, 90, False, wx.EmptyString))
-
-        mainSizer.Add(self.stTitle, 0, wx.ALL, 5)
+        mainSizer.Add(self.stTitle, 0, wx.EXPAND | wx.ALL, 5)
 
         self.m_staticline1 = wx.StaticLine(panel, wx.ID_ANY, wx.DefaultPosition, wx.DefaultSize, wx.LI_HORIZONTAL)
         mainSizer.Add(self.m_staticline1, 0, wx.EXPAND | wx.TOP | wx.BOTTOM, 5)
 
         self.stInfo = wx.StaticText(panel, wx.ID_ANY,
-                                    "Please see the pyfa wiki on GitHub for information regarding these options.",
+                                    _t("Please see the pyfa wiki on GitHub for information regarding these options."),
                                     wx.DefaultPosition, wx.DefaultSize, 0)
         self.stInfo.Wrap(dlgWidth - 50)
         mainSizer.Add(self.stInfo, 0, wx.EXPAND | wx.TOP | wx.BOTTOM, 5)
 
+        self.enforceJwtExpiration = wx.CheckBox(panel, wx.ID_ANY, _t("Enforce Token Expiration"), wx.DefaultPosition,
+                                        wx.DefaultSize,
+                                        0)
+        self.enforceJwtExpiration.SetToolTip(wx.ToolTip(_t("This option is a workaround in case you cannot log into EVE SSO "
+                                                       "due to 'Signature has expired' error")))
+        mainSizer.Add(self.enforceJwtExpiration, 0, wx.ALL | wx.EXPAND, 5)
+
+        self.ssoServer = wx.CheckBox(panel, wx.ID_ANY, _t("Auto-login (starts local server)"), wx.DefaultPosition,
+                                        wx.DefaultSize,
+                                        0)
+        self.ssoServer.SetToolTip(wx.ToolTip(_t("This allows the EVE SSO to callback to your local pyfa instance and complete the authentication process without manual intervention.")))
+        mainSizer.Add(self.ssoServer, 0, wx.ALL | wx.EXPAND, 5)
+
         rbSizer = wx.BoxSizer(wx.HORIZONTAL)
-        self.rbMode = wx.RadioBox(panel, -1, "Login Authentication Method", wx.DefaultPosition, wx.DefaultSize,
-                                  ['Local Server', 'Manual'], 1, wx.RA_SPECIFY_COLS)
-        self.rbMode.SetItemToolTip(0, "This options starts a local webserver that the web application will call back to"
-                                      " with information about the character login.")
-        self.rbMode.SetItemToolTip(1, "This option prompts users to copy and paste information from the web application "
-                                      "to allow for character login. Use this if having issues with the local server.")
 
-        self.rbSsoMode = wx.RadioBox(panel, -1, "SSO Mode", wx.DefaultPosition, wx.DefaultSize,
-                                     ['pyfa.io', 'Custom application'], 1, wx.RA_SPECIFY_COLS)
-        self.rbSsoMode.SetItemToolTip(0, "This options routes SSO Logins through pyfa.io, allowing you to easily login "
-                                         "without any configuration. When in doubt, use this option.")
-        self.rbSsoMode.SetItemToolTip(1, "This option goes through EVE SSO directly, but requires more configuration. Use "
-                                         "this is pyfa.io is blocked for some reason, or if you do not wish to route data throguh pyfa.io.")
+        self.enforceJwtExpiration.SetValue(self.settings.get("enforceJwtExpiration") or True)
+        self.ssoServer.SetValue(True if self.settings.get("loginMode") == 0 else False)
 
-        self.rbMode.SetSelection(self.settings.get('loginMode'))
-        self.rbSsoMode.SetSelection(self.settings.get('ssoMode'))
+        mainSizer.Add(rbSizer, 0, wx.ALL | wx.EXPAND, 0)
 
-        rbSizer.Add(self.rbSsoMode, 1, wx.ALL, 5)
-        rbSizer.Add(self.rbMode, 1, wx.TOP | wx.RIGHT, 5)
+        esiSizer = wx.BoxSizer(wx.HORIZONTAL)
+        
+        self.esiServer = wx.StaticText(panel, wx.ID_ANY, _t("Default SSO Server:"), wx.DefaultPosition, wx.DefaultSize, 0)
 
-        self.rbMode.Bind(wx.EVT_RADIOBOX, self.OnModeChange)
-        self.rbSsoMode.Bind(wx.EVT_RADIOBOX, self.OnSSOChange)
+        self.esiServer.Wrap(-1)
 
-        mainSizer.Add(rbSizer, 1, wx.ALL | wx.EXPAND, 0)
+        esiSizer.Add(self.esiServer, 0, wx.ALL | wx.ALIGN_CENTER_VERTICAL, 5)
 
-        detailsTitle = wx.StaticText(panel, wx.ID_ANY, "Custom Application", wx.DefaultPosition, wx.DefaultSize, 0)
-        detailsTitle.Wrap(-1)
-        detailsTitle.SetFont(wx.Font(12, 70, 90, 90, False, wx.EmptyString))
+        self.esiServer.SetToolTip(wx.ToolTip(_t('The source you choose will be used on connection.')))
 
-        mainSizer.Add(detailsTitle, 0, wx.ALL, 5)
-        mainSizer.Add(wx.StaticLine(panel, wx.ID_ANY, wx.DefaultPosition, wx.DefaultSize, wx.LI_HORIZONTAL), 0,
-                      wx.EXPAND, 5)
+        self.chESIserver = wx.Choice(panel, choices=list(self.settings.keys()))
 
-        fgAddrSizer = wx.FlexGridSizer(2, 2, 0, 0)
-        fgAddrSizer.AddGrowableCol(1)
-        fgAddrSizer.SetFlexibleDirection(wx.BOTH)
-        fgAddrSizer.SetNonFlexibleGrowMode(wx.FLEX_GROWMODE_SPECIFIED)
+        self.chESIserver.SetStringSelection(self.settings.get("server"))
 
-        self.stSetID = wx.StaticText(panel, wx.ID_ANY, u"Client ID:", wx.DefaultPosition, wx.DefaultSize, 0)
-        self.stSetID.Wrap(-1)
-        fgAddrSizer.Add(self.stSetID, 0, wx.ALL | wx.ALIGN_CENTER_VERTICAL, 5)
+        esiSizer.Add(self.chESIserver, 0, wx.ALL | wx.ALIGN_CENTER_VERTICAL, 10)
 
-        self.inputClientID = wx.TextCtrl(panel, wx.ID_ANY, self.settings.get('clientID'), wx.DefaultPosition,
-                                         wx.DefaultSize, 0)
+        mainSizer.Add(esiSizer, 0, wx.TOP | wx.RIGHT, 10)
 
-        fgAddrSizer.Add(self.inputClientID, 0, wx.ALL | wx.ALIGN_CENTER_VERTICAL | wx.EXPAND, 5)
+        self.chESIserver.Bind(wx.EVT_CHOICE, self.OnServerChange)
+        self.enforceJwtExpiration.Bind(wx.EVT_CHECKBOX, self.OnEnforceChange)
+        self.ssoServer.Bind(wx.EVT_CHECKBOX, self.OnModeChange)
 
-        self.stSetSecret = wx.StaticText(panel, wx.ID_ANY, u"Client Secret:", wx.DefaultPosition, wx.DefaultSize, 0)
-        self.stSetSecret.Wrap(-1)
-
-        fgAddrSizer.Add(self.stSetSecret, 0, wx.ALL | wx.ALIGN_CENTER_VERTICAL, 5)
-
-        self.inputClientSecret = wx.TextCtrl(panel, wx.ID_ANY, self.settings.get('clientSecret'), wx.DefaultPosition,
-                                             wx.DefaultSize, 0)
-
-        fgAddrSizer.Add(self.inputClientSecret, 0, wx.ALL | wx.ALIGN_CENTER_VERTICAL | wx.EXPAND, 5)
-
-        self.inputClientID.Bind(wx.EVT_TEXT, self.OnClientDetailChange)
-        self.inputClientSecret.Bind(wx.EVT_TEXT, self.OnClientDetailChange)
-
-        mainSizer.Add(fgAddrSizer, 0, wx.EXPAND, 5)
-
-        # self.stTimout = wx.StaticText(panel, wx.ID_ANY, "Timeout (seconds):", wx.DefaultPosition, wx.DefaultSize, 0)
-        # self.stTimout.Wrap(-1)
-        #
-        # timeoutSizer.Add(self.stTimout, 0, wx.ALL | wx.ALIGN_CENTER_VERTICAL, 5)
-
-        # self.intTimeout = IntCtrl(panel, max=300000, limited=True, value=self.settings.get('timeout'))
-        # timeoutSizer.Add(self.intTimeout, 0, wx.ALL, 5)
-        # self.intTimeout.Bind(wx.lib.intctrl.EVT_INT, self.OnTimeoutChange)
-        #
-        # mainSizer.Add(timeoutSizer, 0, wx.ALL | wx.EXPAND, 0)
-
-        # detailsTitle = wx.StaticText(panel, wx.ID_ANY, "CREST client details", wx.DefaultPosition, wx.DefaultSize, 0)
-        # detailsTitle.Wrap(-1)
-        # detailsTitle.SetFont(wx.Font(12, 70, 90, 90, False, wx.EmptyString))
-        #
-        # mainSizer.Add(detailsTitle, 0, wx.ALL, 5)
-        # mainSizer.Add(wx.StaticLine(panel, wx.ID_ANY, wx.DefaultPosition, wx.DefaultSize, wx.LI_HORIZONTAL), 0,
-        #               wx.EXPAND, 5)
-
-        # fgAddrSizer = wx.FlexGridSizer(2, 2, 0, 0)
-        # fgAddrSizer.AddGrowableCol(1)
-        # fgAddrSizer.SetFlexibleDirection(wx.BOTH)
-        # fgAddrSizer.SetNonFlexibleGrowMode(wx.FLEX_GROWMODE_SPECIFIED)
-        #
-        # self.stSetID = wx.StaticText(panel, wx.ID_ANY, "Client ID:", wx.DefaultPosition, wx.DefaultSize, 0)
-        # self.stSetID.Wrap(-1)
-        # fgAddrSizer.Add(self.stSetID, 0, wx.ALL | wx.ALIGN_CENTER_VERTICAL, 5)
-        #
-        # self.inputClientID = wx.TextCtrl(panel, wx.ID_ANY, self.settings.get('clientID'), wx.DefaultPosition,
-        #                                  wx.DefaultSize, 0)
-        #
-        # fgAddrSizer.Add(self.inputClientID, 0, wx.ALL | wx.ALIGN_CENTER_VERTICAL | wx.EXPAND, 5)
-        #
-        # self.stSetSecret = wx.StaticText(panel, wx.ID_ANY, "Client Secret:", wx.DefaultPosition, wx.DefaultSize, 0)
-        # self.stSetSecret.Wrap(-1)
-        #
-        # fgAddrSizer.Add(self.stSetSecret, 0, wx.ALL | wx.ALIGN_CENTER_VERTICAL, 5)
-        #
-        # self.inputClientSecret = wx.TextCtrl(panel, wx.ID_ANY, self.settings.get('clientSecret'), wx.DefaultPosition,
-        #                                      wx.DefaultSize, 0)
-        #
-        # fgAddrSizer.Add(self.inputClientSecret, 0, wx.ALL | wx.ALIGN_CENTER_VERTICAL | wx.EXPAND, 5)
-        #
-        # self.btnApply = wx.Button(panel, wx.ID_ANY, "Save Client Settings", wx.DefaultPosition, wx.DefaultSize, 0)
-        # self.btnApply.Bind(wx.EVT_BUTTON, self.OnBtnApply)
-        #
-        # mainSizer.Add(fgAddrSizer, 0, wx.EXPAND, 5)
-        # mainSizer.Add(self.btnApply, 0, wx.ALIGN_RIGHT, 5)
-
-        # self.ToggleProxySettings(self.settings.get('loginMode'))
-
-        self.ToggleSSOMode(self.settings.get('ssoMode'))
         panel.SetSizer(mainSizer)
+
         panel.Layout()
 
     def OnTimeoutChange(self, event):
         self.settings.set('timeout', event.GetEventObject().GetValue())
+        event.Skip()
 
     def OnModeChange(self, event):
-        self.settings.set('loginMode', event.GetInt())
+        self.settings.set('loginMode', 0 if self.ssoServer.GetValue() else 1)
+        event.Skip()
 
-    def OnSSOChange(self, event):
-        self.settings.set('ssoMode', event.GetInt())
-        self.ToggleSSOMode(event.GetInt())
+    def OnEnforceChange(self, event):
+        self.settings.set('enforceJwtExpiration', self.enforceJwtExpiration.GetValue())
+        event.Skip()
 
-    def ToggleSSOMode(self, mode):
-        if mode:
-            self.stSetID.Enable()
-            self.inputClientID.Enable()
-            self.stSetSecret.Enable()
-            self.inputClientSecret.Enable()
-            self.rbMode.Disable()
-        else:
-            self.stSetID.Disable()
-            self.inputClientID.Disable()
-            self.stSetSecret.Disable()
-            self.inputClientSecret.Disable()
-            self.rbMode.Enable()
-
-    def OnClientDetailChange(self, evt):
-        self.settings.set('clientID', self.inputClientID.GetValue().strip())
-        self.settings.set('clientSecret', self.inputClientSecret.GetValue().strip())
-
-        # sEsi = Esi.getInstance()
-        # sEsi.delAllCharacters()
-        #
+    def OnServerChange(self, event):
+        # pass
+        source = self.chESIserver.GetString(self.chESIserver.GetSelection())
+        esiService = Esi.getInstance()
+        # init servers
+        esiService.init(config.supported_servers[source])
+        self.settings.set("server", source)
+        event.Skip()
 
     def getImage(self):
         return BitmapLoader.getBitmap("eve", "gui")

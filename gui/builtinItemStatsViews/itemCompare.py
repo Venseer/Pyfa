@@ -7,14 +7,21 @@ from service.market import Market
 from service.attribute import Attribute
 from gui.utils.numberFormatter import formatAmount
 
+_t = wx.GetTranslation
+
+
+def defaultSort(item):
+    return (item.metaLevel or 0, item.name)
+
 
 class ItemCompare(wx.Panel):
     def __init__(self, parent, stuff, item, items, context=None):
         # Start dealing with Price stuff to get that thread going
         sPrice = ServicePrice.getInstance()
-        sPrice.getPrices(items, self.UpdateList)
+        sPrice.getPrices(items, self.UpdateList, fetchTimeout=90)
 
         wx.Panel.__init__(self, parent)
+        self.SetBackgroundColour(wx.SystemSettings.GetColour(wx.SYS_COLOUR_BTNFACE))
         mainSizer = wx.BoxSizer(wx.VERTICAL)
 
         self.paramList = AutoListCtrl(self, wx.ID_ANY,
@@ -27,9 +34,10 @@ class ItemCompare(wx.Panel):
         self.currentSort = None
         self.sortReverse = False
         self.item = item
-        self.items = sorted(items,
-                            key=lambda x: x.attributes['metaLevel'].value if 'metaLevel' in x.attributes else 0)
+        self.items = sorted(items, key=defaultSort)
         self.attrs = {}
+        self.HighlightOn = wx.Colour(255, 255, 0, wx.ALPHA_OPAQUE)
+        self.highlightedNames = []
 
         # get a dict of attrName: attrInfo of all unique attributes across all items
         for item in self.items:
@@ -66,11 +74,11 @@ class ItemCompare(wx.Panel):
         self.totalAttrsLabel = wx.StaticText(self, wx.ID_ANY, " ", wx.DefaultPosition, wx.DefaultSize, 0)
         bSizer.Add(self.totalAttrsLabel, 0, wx.ALIGN_CENTER_VERTICAL | wx.RIGHT)
 
-        self.toggleViewBtn = wx.ToggleButton(self, wx.ID_ANY, "Toggle view mode", wx.DefaultPosition,
+        self.toggleViewBtn = wx.ToggleButton(self, wx.ID_ANY, _t("Toggle view mode"), wx.DefaultPosition,
                                              wx.DefaultSize, 0)
         bSizer.Add(self.toggleViewBtn, 0, wx.ALIGN_CENTER_VERTICAL)
 
-        self.refreshBtn = wx.Button(self, wx.ID_ANY, "Refresh", wx.DefaultPosition, wx.DefaultSize,
+        self.refreshBtn = wx.Button(self, wx.ID_ANY, _t("Refresh"), wx.DefaultPosition, wx.DefaultSize,
                                     wx.BU_EXACTFIT)
         bSizer.Add(self.refreshBtn, 0, wx.ALIGN_CENTER_VERTICAL)
         self.refreshBtn.Bind(wx.EVT_BUTTON, self.RefreshValues)
@@ -81,6 +89,21 @@ class ItemCompare(wx.Panel):
 
         self.toggleViewBtn.Bind(wx.EVT_TOGGLEBUTTON, self.ToggleViewMode)
         self.Bind(wx.EVT_LIST_COL_CLICK, self.SortCompareCols)
+
+        self.Bind(wx.EVT_LIST_ITEM_ACTIVATED, self.HighlightRow)
+
+    def HighlightRow(self, event):
+        itemIdx = event.GetIndex()
+        name = self.paramList.GetItem(itemIdx).Text
+        if name in self.highlightedNames:
+            self.highlightedNames.remove(name)
+        else:
+            self.highlightedNames.append(name)
+        self.Freeze()
+        self.paramList.ClearAll()
+        self.PopulateList()
+        self.Thaw()
+        event.Skip()
 
     def SortCompareCols(self, event):
         self.Freeze()
@@ -125,15 +148,20 @@ class ItemCompare(wx.Panel):
                     # Remember to reduce by 1, because the attrs array
                     # starts at 0 while the list has the item name as column 0.
                     attr = str(list(self.attrs.keys())[sort - 1])
-                    func = lambda _val: _val.attributes[attr].value if attr in _val.attributes else None
+                    func = lambda _val: _val.attributes[attr].value if attr in _val.attributes else 0.0
+                # Clicked on a column that's not part of our array (price most likely)
                 except IndexError:
-                    # Clicked on a column that's not part of our array (price most likely)
-                    self.sortReverse = False
-                    func = lambda _val: _val.attributes['metaLevel'].value if 'metaLevel' in _val.attributes else None
+                    # Price
+                    if sort == len(self.attrs) + 1:
+                        func = lambda i: i.price.price if i.price.price != 0 else float("Inf")
+                    # Something else
+                    else:
+                        self.sortReverse = False
+                        func = defaultSort
 
             self.items = sorted(self.items, key=func, reverse=self.sortReverse)
 
-        self.paramList.InsertColumn(0, "Item")
+        self.paramList.InsertColumn(0, _t("Item"))
         self.paramList.SetColumnWidth(0, 200)
 
         for i, attr in enumerate(self.attrs.keys()):
@@ -141,8 +169,10 @@ class ItemCompare(wx.Panel):
             self.paramList.InsertColumn(i + 1, name)
             self.paramList.SetColumnWidth(i + 1, 120)
 
-        self.paramList.InsertColumn(len(self.attrs) + 1, "Price")
+        self.paramList.InsertColumn(len(self.attrs) + 1, _t("Price"))
         self.paramList.SetColumnWidth(len(self.attrs) + 1, 60)
+
+        toHighlight = []
 
         for item in self.items:
             i = self.paramList.InsertItem(self.paramList.GetItemCount(), item.name)
@@ -160,10 +190,19 @@ class ItemCompare(wx.Panel):
                     self.paramList.SetItem(i, x + 1, valueUnit)
 
             # Add prices
-            self.paramList.SetItem(i, len(self.attrs) + 1, formatAmount(item.price.price, 3, 3, 9, currency=True))
+            self.paramList.SetItem(i, len(self.attrs) + 1, formatAmount(item.price.price, 3, 3, 9, currency=True) if item.price.price else "")
+            if item.name in self.highlightedNames:
+                toHighlight.append(i)
 
         self.paramList.RefreshRows()
         self.Layout()
+
+        # Highlight after layout, otherwise colors are getting overwritten
+        for itemIdx in toHighlight:
+            listItem = self.paramList.GetItem(itemIdx)
+            listItem.SetBackgroundColour(self.HighlightOn)
+            listItem.SetFont(listItem.GetFont().MakeBold())
+            self.paramList.SetItem(listItem)
 
     @staticmethod
     def TranslateValueUnit(value, unitName, unitDisplayName):
@@ -180,16 +219,16 @@ class ItemCompare(wx.Panel):
             return "%s (%d)" % (attribute.name.capitalize(), value)
 
         trans = {
-            "Inverse Absolute Percent" : (lambda: (1 - value) * 100, unitName),
+            "Inverse Absolute Percent": (lambda: (1 - value) * 100, unitName),
             "Inversed Modifier Percent": (lambda: (1 - value) * 100, unitName),
-            "Modifier Percent"         : (lambda: ("%+.2f" if ((value - 1) * 100) % 1 else "%+d") % ((value - 1) * 100), unitName),
-            "Volume"                   : (lambda: value, "m\u00B3"),
-            "Sizeclass"                : (lambda: value, ""),
-            "Absolute Percent"         : (lambda: (value * 100), unitName),
-            "Milliseconds"             : (lambda: value / 1000.0, unitName),
-            "typeID"                   : (itemIDCallback, ""),
-            "groupID"                  : (groupIDCallback, ""),
-            "attributeID"              : (attributeIDCallback, "")
+            "Modifier Percent": (lambda: ("%+.2f" if ((value - 1) * 100) % 1 else "%+d") % ((value - 1) * 100), unitName),
+            "Volume": (lambda: value, "m\u00B3"),
+            "Sizeclass": (lambda: value, ""),
+            "Absolute Percent": (lambda: (value * 100), unitName),
+            "Milliseconds": (lambda: value / 1000.0, unitName),
+            "typeID": (itemIDCallback, ""),
+            "groupID": (groupIDCallback, ""),
+            "attributeID": (attributeIDCallback, "")
         }
 
         override = trans.get(unitDisplayName)

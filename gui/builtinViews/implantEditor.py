@@ -1,3 +1,5 @@
+import re
+
 # noinspection PyPackageRequirements
 import wx
 # noinspection PyPackageRequirements
@@ -10,7 +12,14 @@ from gui.marketBrowser import SearchBox
 from service.market import Market
 
 
+def stripHtml(text):
+    text = re.sub(r'<\s*br\s*/?\s*>', '\n', text)
+    text = re.sub(r'</?[^/]+?(/\s*)?>', '', text)
+    return text
+
+
 class BaseImplantEditorView(wx.Panel):
+
     def addMarketViewImage(self, iconFile):
         if iconFile is None:
             return -1
@@ -36,13 +45,6 @@ class BaseImplantEditorView(wx.Panel):
 
         availableSizer.Add(self.searchBox, 0, wx.EXPAND)
         availableSizer.Add(self.itemView, 1, wx.EXPAND)
-
-        '''
-        self.availableImplantsSearch = wx.SearchCtrl(self, wx.ID_ANY, style=wx.TE_PROCESS_ENTER)
-        self.availableImplantsSearch.ShowCancelButton(True)
-
-        availableSizer.Add(self.availableImplantsSearch, 0, wx.BOTTOM | wx.EXPAND, 2)
-        '''
 
         self.availableImplantsTree = wx.TreeCtrl(self, wx.ID_ANY, style=wx.TR_DEFAULT_STYLE | wx.TR_HIDE_ROOT)
         root = self.availableRoot = self.availableImplantsTree.AddRoot("Available")
@@ -74,8 +76,10 @@ class BaseImplantEditorView(wx.Panel):
 
         self.SetSizer(pmainSizer)
 
-        # Populate the market tree
+        self.hoveredLeftTreeTypeID = None
+        self.hoveredRightListRow = None
 
+        # Populate the market tree
         sMkt = Market.getInstance()
         for mktGrp in sMkt.getImplantTree():
             iconId = self.addMarketViewImage(sMkt.getIconByMarketGroup(mktGrp))
@@ -88,8 +92,12 @@ class BaseImplantEditorView(wx.Panel):
         # Bind the event to replace dummies by real data
         self.availableImplantsTree.Bind(wx.EVT_TREE_ITEM_EXPANDING, self.expandLookup)
         self.availableImplantsTree.Bind(wx.EVT_TREE_ITEM_ACTIVATED, self.itemSelected)
+        self.availableImplantsTree.Bind(wx.EVT_MOTION, self.OnLeftTreeMouseMove)
+        self.availableImplantsTree.Bind(wx.EVT_LEAVE_WINDOW, self.OnLeftTreeMouseLeave)
 
         self.itemView.Bind(wx.EVT_LIST_ITEM_ACTIVATED, self.itemSelected)
+
+        self.pluggedImplantsTree.Bind(wx.EVT_MOTION, self.OnRightListMouseMove)
 
         # Bind add & remove buttons
         self.btnAdd.Bind(wx.EVT_BUTTON, self.itemSelected)
@@ -121,7 +129,7 @@ class BaseImplantEditorView(wx.Panel):
 
     def update(self):
         """Updates implant list based off the current context"""
-        self.implants = self.getImplantsFromContext()
+        self.implants = self.getImplantsFromContext()[:]
         self.implants.sort(key=lambda i: int(i.getModifiedItemAttr("implantness")))
         self.pluggedImplantsTree.update(self.implants)
 
@@ -199,10 +207,58 @@ class BaseImplantEditorView(wx.Panel):
             self.removeImplantFromContext(self.implants[pos])
             self.update()
 
+    # Due to https://github.com/wxWidgets/Phoenix/issues/1372 we cannot set tooltips on
+    # tree itself; work this around with following two methods, by setting tooltip to
+    # parent window
+    def OnLeftTreeMouseMove(self, event):
+        event.Skip()
+        treeItemId, _ = self.availableImplantsTree.HitTest(event.Position)
+        if not treeItemId:
+            if self.hoveredLeftTreeTypeID is not None:
+                self.hoveredLeftTreeTypeID = None
+                self.SetToolTip(None)
+            return
+        item = self.availableImplantsTree.GetItemData(treeItemId)
+        isImplant = getattr(item, 'isImplant', False)
+        if not isImplant:
+            if self.hoveredLeftTreeTypeID is not None:
+                self.hoveredLeftTreeTypeID = None
+                self.SetToolTip(None)
+            return
+        if self.hoveredLeftTreeTypeID == item.ID:
+            return
+        if self.ToolTip is not None:
+            self.SetToolTip(None)
+        else:
+            self.hoveredLeftTreeTypeID = item.ID
+            toolTip = wx.ToolTip(stripHtml(item.description))
+            toolTip.SetMaxWidth(self.GetSize().Width)
+            self.SetToolTip(toolTip)
+
+    def OnLeftTreeMouseLeave(self, event):
+        event.Skip()
+        self.SetToolTip(None)
+
+    def OnRightListMouseMove(self, event):
+        event.Skip()
+        row, _, col = self.pluggedImplantsTree.HitTestSubItem(event.Position)
+        if row != self.hoveredRightListRow:
+            if self.pluggedImplantsTree.ToolTip is not None:
+                self.pluggedImplantsTree.SetToolTip(None)
+            else:
+                self.hoveredRightListRow = row
+                try:
+                    implant = self.implants[row]
+                except IndexError:
+                    self.pluggedImplantsTree.SetToolTip(None)
+                else:
+                    toolTip = wx.ToolTip(stripHtml(implant.item.description))
+                    toolTip.SetMaxWidth(self.pluggedImplantsTree.GetSize().Width)
+                    self.pluggedImplantsTree.SetToolTip(toolTip)
+
 
 class AvailableImplantsView(d.Display):
     DEFAULT_COLS = ["attr:implantness",
-                    "Base Icon",
                     "Base Name"]
 
     def __init__(self, parent):
@@ -212,15 +268,14 @@ class AvailableImplantsView(d.Display):
 
 class ItemView(d.Display):
     DEFAULT_COLS = ["Base Icon",
-                    "Base Name",
-                    "attr:power,,,True",
-                    "attr:cpu,,,True"]
+                    "Base Name"]
 
     def __init__(self, parent):
         d.Display.__init__(self, parent)
         self.parent = parent
         self.searchBox = parent.searchBox
 
+        self.hoveredRow = None
         self.items = []
 
         # Bind search actions
@@ -228,6 +283,8 @@ class ItemView(d.Display):
         self.searchBox.Bind(SBox.EVT_SEARCH_BTN, self.scheduleSearch)
         self.searchBox.Bind(SBox.EVT_CANCEL_BTN, self.clearSearch)
         self.searchBox.Bind(SBox.EVT_TEXT, self.scheduleSearch)
+
+        self.Bind(wx.EVT_MOTION, self.OnMouseMove)
 
     def clearSearch(self, event=None):
         if self.IsShown():
@@ -245,21 +302,39 @@ class ItemView(d.Display):
         sMkt = Market.getInstance()
 
         search = self.searchBox.GetLineText(0)
-        # Make sure we do not count wildcard as search symbol
-        realsearch = search.replace("*", "")
+        # Make sure we do not count wildcards as search symbol
+        realsearch = search.replace('*', '').replace('?', '')
         # Show nothing if query is too short
         if len(realsearch) < 3:
             self.clearSearch()
             return
 
-        sMkt.searchItems(search, self.populateSearch, ["Implant"])
+        sMkt.searchItems(search, self.populateSearch, 'implants')
 
-    def populateSearch(self, items):
+    def populateSearch(self, itemIDs):
         if not self.IsShown():
             self.parent.availableImplantsTree.Hide()
             self.Show()
             self.parent.Layout()
-
+        items = Market.getItems(itemIDs)
+        items = [i for i in items if i.group.name != 'Booster']
         self.items = sorted(list(items), key=lambda i: i.name)
 
         self.update(self.items)
+
+    def OnMouseMove(self, event):
+        event.Skip()
+        row, _, col = self.HitTestSubItem(event.Position)
+        if row != self.hoveredRow:
+            if self.ToolTip is not None:
+                self.SetToolTip(None)
+            else:
+                self.hoveredRow = row
+                try:
+                    item = self.items[row]
+                except IndexError:
+                    self.SetToolTip(None)
+                else:
+                    toolTip = wx.ToolTip(stripHtml(item.description))
+                    toolTip.SetMaxWidth(self.GetSize().Width)
+                    self.SetToolTip(toolTip)

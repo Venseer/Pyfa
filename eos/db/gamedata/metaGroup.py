@@ -17,35 +17,25 @@
 # along with eos.  If not, see <http://www.gnu.org/licenses/>.
 # ===============================================================================
 
-from sqlalchemy import Table, Column, Integer, ForeignKey, String
-from sqlalchemy.ext.associationproxy import association_proxy
-from sqlalchemy.orm import relation, mapper, synonym
+from sqlalchemy import Table, Column, Integer, String
+from sqlalchemy.orm import mapper, synonym
 
 from eos.db import gamedata_meta
-from eos.db.gamedata.item import items_table
-from eos.gamedata import Item, MetaGroup, MetaType
+from eos.gamedata import MetaGroup
+import eos.config
 
-metagroups_table = Table("invmetagroups", gamedata_meta,
-                         Column("metaGroupID", Integer, primary_key=True),
-                         Column("metaGroupName", String))
+metagroups_table = Table(
+    "invmetagroups",
+    gamedata_meta,
+    Column("metaGroupID", Integer, primary_key=True),
+    *[Column("metaGroupName{}".format(lang), String) for lang in eos.config.translation_mapping.values()],
+)
 
-metatypes_table = Table("invmetatypes", gamedata_meta,
-                        Column("typeID", Integer, ForeignKey("invtypes.typeID"), primary_key=True),
-                        Column("parentTypeID", Integer, ForeignKey("invtypes.typeID")),
-                        Column("metaGroupID", Integer, ForeignKey("invmetagroups.metaGroupID")))
-
-mapper(MetaGroup, metagroups_table,
-       properties={
-           "ID"  : synonym("metaGroupID"),
-           "name": synonym("metaGroupName")
-        })
-
-mapper(MetaType, metatypes_table,
-       properties={
-           "ID"    : synonym("metaGroupID"),
-           "parent": relation(Item, primaryjoin=metatypes_table.c.parentTypeID == items_table.c.typeID),
-           "items" : relation(Item, primaryjoin=metatypes_table.c.typeID == items_table.c.typeID),
-           "info"  : relation(MetaGroup, lazy=False)
-        })
-
-MetaType.name = association_proxy("info", "name")
+mapper(
+    MetaGroup,
+    metagroups_table,
+    properties={
+        "ID"  : synonym("metaGroupID"),
+        "name": synonym("metaGroupName{}".format(eos.config.lang))
+    }
+)

@@ -5,8 +5,7 @@ from itertools import chain
 import subprocess
 import requests.certs
 
-label = subprocess.check_output([
-    "git", "describe", "--tags"]).strip()
+label = subprocess.check_output(["git", "describe", "--tags"]).strip()
 
 with open('.version', 'w+') as f:
     f.write(label.decode())
@@ -21,18 +20,21 @@ added_files = [
              ('../../service/jargon/*.yaml', 'service/jargon'),
              ('../../dist_assets/win/pyfa.ico', '.'),
              ('../../dist_assets/win/pyfa.exe.manifest', '.'),
-             ('../../dist_assets/win/Microsoft.VC90.CRT.manifest', '.'),
              (requests.certs.where(), '.'),  # is this needed anymore?
              ('../../eve.db', '.'),
              ('../../README.md', '.'),
              ('../../LICENSE', '.'),
-             ('../../.version', '.'),
+             ('../../version.yml', '.'),
              ]
 
-import_these = []
+import_these = [
+    'numpy.core._dtype_ctypes',  # https://github.com/pyinstaller/pyinstaller/issues/3982
+    'sqlalchemy.ext.baked',  # windows build doesn't launch without if when using sqlalchemy 1.3.x
+    'pkg_resources.py2_warn'  # issue 2156
+]
 
 # Walk directories that do dynamic importing
-paths = ('eos/effects', 'eos/db/migrations', 'service/conversions')
+paths = ('eos/db/migrations', 'service/conversions')
 for root, folders, files in chain.from_iterable(os.walk(path) for path in paths):
     for file_ in files:
         if file_.endswith(".py") and not file_.startswith("_"):

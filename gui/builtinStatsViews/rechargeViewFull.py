@@ -19,12 +19,15 @@
 
 # noinspection PyPackageRequirements
 import wx
-from gui.statsView import StatsView
-from gui.bitmap_loader import BitmapLoader
-from gui.utils.numberFormatter import formatAmount
+
+import gui.globalEvents as GE
 import gui.mainFrame
-from gui.builtinStatsViews.resistancesViewFull import EFFECTIVE_HP_TOGGLED
+from gui.bitmap_loader import BitmapLoader
+from gui.statsView import StatsView
+from gui.utils.numberFormatter import formatAmount
 from service.fit import Fit
+
+_t = wx.GetTranslation
 
 
 class RechargeViewFull(StatsView):
@@ -34,21 +37,26 @@ class RechargeViewFull(StatsView):
         StatsView.__init__(self)
         self.parent = parent
         self.mainFrame = gui.mainFrame.MainFrame.getInstance()
-        self.mainFrame.Bind(EFFECTIVE_HP_TOGGLED, self.toggleEffective)
-        self.effective = True
+        self.mainFrame.Bind(GE.EFFECTIVE_HP_TOGGLED, self.toggleEffective)
 
     def getHeaderText(self, fit):
-        return "Recharge rates"
+        return _t("Recharge rates")
 
     def getTextExtentW(self, text):
         width, height = self.parent.GetTextExtent(text)
         return width
 
+    @property
+    def effective(self):
+        try:
+            return self.parent.nameViewMap['resistancesViewFull'].showEffective
+        except KeyError:
+            return False
+
     def toggleEffective(self, event):
-        self.effective = event.effective
+        event.Skip()
         sFit = Fit.getInstance()
         self.refreshPanel(sFit.getFit(self.mainFrame.getActiveFit()))
-        event.Skip()
 
     def populatePanel(self, contentPanel, headerPanel):
         contentSizer = contentPanel.GetSizer()
@@ -63,15 +71,20 @@ class RechargeViewFull(StatsView):
 
         # Add an empty label first for correct alignment.
         sizerTankStats.Add(wx.StaticText(contentPanel, wx.ID_ANY, ""), 0)
-        toolTipText = {"shieldPassive": "Passive shield recharge", "shieldActive": "Active shield boost",
-                       "armorActive": "Armor repair amount", "hullActive": "Hull repair amount"}
+        toolTipText = {
+            "shieldPassive": _t("Passive shield recharge"),
+            "shieldActive": _t("Active shield boost"),
+            "armorActive": _t("Armor repair amount"),
+            "hullActive": _t("Hull repair amount")}
         for tankType in ("shieldPassive", "shieldActive", "armorActive", "hullActive"):
             bitmap = BitmapLoader.getStaticBitmap("%s_big" % tankType, contentPanel, "gui")
             tooltip = wx.ToolTip(toolTipText[tankType])
             bitmap.SetToolTip(tooltip)
             sizerTankStats.Add(bitmap, 0, wx.ALIGN_CENTER)
 
-        toolTipText = {"reinforced": "Reinforced", "sustained": "Sustained"}
+        toolTipText = {
+            "reinforced": _t("Reinforced"),
+            "sustained": _t("Sustained")}
         for stability in ("reinforced", "sustained"):
             bitmap = BitmapLoader.getStaticBitmap("regen%s_big" % stability.capitalize(), contentPanel, "gui")
             tooltip = wx.ToolTip(toolTipText[stability])
@@ -85,7 +98,6 @@ class RechargeViewFull(StatsView):
                 tankTypeCap = tankType[0].capitalize() + tankType[1:]
                 lbl = wx.StaticText(contentPanel, wx.ID_ANY, "0.0", style=wx.ALIGN_RIGHT)
                 setattr(self, "labelTank%s%s" % (stability.capitalize(), tankTypeCap), lbl)
-
                 box = wx.BoxSizer(wx.HORIZONTAL)
                 box.Add(lbl, 0, wx.EXPAND)
 
@@ -99,8 +111,7 @@ class RechargeViewFull(StatsView):
 
     def refreshPanel(self, fit):
         # If we did anything interesting, we'd update our labels to reflect the new fit's stats here
-
-        unit = " EHP/s" if self.parent.nameViewMap['resistancesViewFull'].showEffective else " HP/s"
+        unit = " EHP/s" if self.effective else " HP/s"
 
         for stability in ("reinforced", "sustained"):
             if stability == "reinforced" and fit is not None:
@@ -115,9 +126,23 @@ class RechargeViewFull(StatsView):
                 unitlbl = getattr(self, "unitLabelTank%s%sActive" % (stability.capitalize(), name.capitalize()))
                 unitlbl.SetLabel(unit)
                 if tank is not None:
-                    lbl.SetLabel("%.1f" % tank["%sRepair" % name])
+                    amount = tank["{}Repair".format(name)]
                 else:
-                    lbl.SetLabel("0.0")
+                    amount = 0
+
+                if tank is not None and name == "armor":
+                    preSpoolAmount = tank["armorRepairPreSpool"]
+                    fullSpoolAmount = tank["armorRepairFullSpool"]
+                    if round(preSpoolAmount, 1) != round(fullSpoolAmount, 1):
+                        ttText = "Spool up: {:.1f}-{:.1f}".format(preSpoolAmount, fullSpoolAmount)
+                    else:
+                        ttText = ""
+                else:
+                    ttText = ""
+
+                lbl.SetLabel("{:.1f}{}".format(amount, "\u02e2" if ttText else ""))
+                lbl.SetToolTip(wx.ToolTip(ttText))
+                unitlbl.SetToolTip(wx.ToolTip(ttText))
 
         if fit is not None:
             label = getattr(self, "labelTankSustainedShieldPassive")

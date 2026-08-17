@@ -95,7 +95,7 @@ class Implant(HandledItem, ItemAttrShortcut):
             return
         for effect in self.item.effects.values():
             if effect.runTime == runTime and effect.isType("passive") and effect.activeByDefault:
-                effect.handler(fit, self, ("implant",))
+                effect.handler(fit, self, ("implant",), None, effect=effect)
 
     @validates("fitID", "itemID", "active")
     def validator(self, key, val):
@@ -114,6 +114,11 @@ class Implant(HandledItem, ItemAttrShortcut):
         copy = Implant(self.item)
         copy.active = self.active
         return copy
+
+    def rebase(self, item):
+        active = self.active
+        Implant.__init__(self, item)
+        self.active = active
 
     def __repr__(self):
         return "Implant(ID={}, name={}) at {}".format(

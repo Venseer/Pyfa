@@ -1,11 +1,15 @@
 import os
 import sys
+import yaml
+import wx
 
 from logbook import CRITICAL, DEBUG, ERROR, FingersCrossedHandler, INFO, Logger, NestedSetup, NullHandler, \
     StreamHandler, TimedRotatingFileHandler, WARNING
 import hashlib
+from eos.const import FittingSlot
 
 from cryptography.fernet import Fernet
+from collections import namedtuple
 
 pyfalog = Logger(__name__)
 
@@ -22,26 +26,34 @@ debug = False
 # Defines if our saveddata will be in pyfa root or not
 saveInRoot = False
 
-# Version data
-
-version = "2.3.0"
-tag = "Stable"
-expansionName = "YC120.7"
-expansionVersion = "1.2"
 evemonMinVersion = "4081"
 
 minItemSearchLength = 3
+minItemSearchLengthCjk = 1
 
 pyfaPath = None
 savePath = None
 saveDB = None
 gameDB = None
+imgsZIP = None
 logPath = None
 loggingLevel = None
 logging_setup = None
 cipher = None
 clientHash = None
+experimentalFeatures = None
+version = None
+language = None
 
+ApiServer = namedtuple('ApiBase', ['name', 'sso', 'esi', 'client_id', 'callback', 'supports_auto_login'])
+supported_servers = {
+    "Tranquility": ApiServer("Tranquility", "login.eveonline.com", "esi.evetech.net", '095d8cd841ac40b581330919b49fe746', 'https://pyfa-org.github.io/Pyfa/callback', True),
+    # No point having SISI: https://developers.eveonline.com/blog/article/removing-datasource-singularity
+    # "Singularity": ApiServer("Singularity", "sisilogin.testeveonline.com", "esi.evetech.net", 'b9c3cc79448f449ab17f3aebd018842e', 'https://pyfa-org.github.io/Pyfa/callback'),
+    "Serenity": ApiServer("Serenity", "login.evepc.163.com", "ali-esi.evepc.163.com", 'bc90aa496a404724a93f41b4f4e97761', 'https://ali-esi.evepc.163.com/ui/oauth2-redirect.html', False)
+}
+
+SSO_LOGOFF_SERENITY='https://login.evepc.163.com/account/logoff'
 ESI_CACHE = 'esi_cache'
 
 LOGLEVEL_MAP = {
@@ -51,6 +63,24 @@ LOGLEVEL_MAP = {
     "info": INFO,
     "debug": DEBUG,
 }
+
+CATALOG = 'lang'
+
+
+slotColourMapDark = {
+    FittingSlot.LOW: wx.Colour(44, 36, 19),  # yellow = low slots 24/13
+    FittingSlot.MED: wx.Colour(28, 39, 51),  # blue   = mid slots 8.1/9.5
+    FittingSlot.HIGH: wx.Colour(53, 31, 34),  # red    = high slots 6.5/11.5
+    FittingSlot.RIG: '',
+    FittingSlot.SUBSYSTEM: ''}
+errColorDark = wx.Colour(70, 20, 20)
+slotColourMap = {
+    FittingSlot.LOW: wx.Colour(250, 235, 204),  # yellow = low slots
+    FittingSlot.MED: wx.Colour(188, 215, 241),  # blue   = mid slots
+    FittingSlot.HIGH: wx.Colour(235, 204, 209),  # red    = high slots
+    FittingSlot.RIG: '',
+    FittingSlot.SUBSYSTEM: ''}
+errColor = wx.Colour(204, 51, 51)
 
 
 def getClientSecret():
@@ -79,12 +109,7 @@ def getPyfaRoot():
 
 
 def getVersion():
-    if os.path.isfile(os.path.join(pyfaPath, '.version')):
-        with open(os.path.join(pyfaPath, '.version')) as f:
-            gitVersion = f.readline()
-        return gitVersion
-    # if no version file exists, then user is running from source or not an official build
-    return version + " (git)"
+    return version
 
 
 def getDefaultSave():
@@ -97,10 +122,14 @@ def defPaths(customSavePath=None):
     global savePath
     global saveDB
     global gameDB
+    global imgsZIP
     global saveInRoot
     global logPath
     global cipher
     global clientHash
+    global version
+    global experimentalFeatures
+    global language
 
     pyfalog.debug("Configuring Pyfa")
 
@@ -109,6 +138,12 @@ def defPaths(customSavePath=None):
     pyfaPath = getattr(configforced, "pyfaPath", pyfaPath)
     if pyfaPath is None:
         pyfaPath = getPyfaRoot()
+
+    # Version data
+
+    with open(os.path.join(pyfaPath, "version.yml"), 'r') as file:
+        data = yaml.load(file, Loader=yaml.SafeLoader)
+        version = data['version']
 
     # Where we store the saved fits etc, default is the current users home directory
     if saveInRoot is True:
@@ -149,12 +184,20 @@ def defPaths(customSavePath=None):
     if not gameDB:
         gameDB = os.path.join(pyfaPath, "eve.db")
 
+    imgsZIP = getattr(configforced, "imgsZIP", imgsZIP)
+    if not imgsZIP:
+        imgsZIP = os.path.join(pyfaPath, "imgs.zip")
+
     if debug:
         logFile = "pyfa_debug.log"
     else:
         logFile = "pyfa.log"
 
     logPath = os.path.join(savePath, logFile)
+
+    experimentalFeatures = getattr(configforced, "experimentalFeatures", experimentalFeatures)
+    if experimentalFeatures is None:
+        experimentalFeatures = False
 
     # DON'T MODIFY ANYTHING BELOW
     import eos.config
@@ -165,13 +208,16 @@ def defPaths(customSavePath=None):
     eos.config.saveddata_connectionstring = "sqlite:///" + saveDB + "?check_same_thread=False"
     eos.config.gamedata_connectionstring = "sqlite:///" + gameDB + "?check_same_thread=False"
 
-    print(eos.config.saveddata_connectionstring)
-    print(eos.config.gamedata_connectionstring)
-
     # initialize the settings
-    from service.settings import EOSSettings
+    from service.settings import EOSSettings, LocaleSettings
     eos.config.settings = EOSSettings.getInstance().EOSSettings  # this is kind of confusing, but whatever
 
+    # set language, taking the passed argument or falling back to what's saved in the settings
+    localeSettings = LocaleSettings.getInstance()
+    language = language or localeSettings.get('locale')
+
+    # sets the lang for eos, using the mapped language.
+    eos.config.set_lang(localeSettings.get_eos_locale())
 
 def defLogging():
     global debug
@@ -217,6 +263,8 @@ def defLogging():
                         # reset=False,
                 )
             ])
+    except (KeyboardInterrupt, SystemExit):
+        raise
     except:
         print("Critical error attempting to setup logging. Falling back to console only.")
         logging_setup = NestedSetup([
@@ -229,22 +277,8 @@ def defLogging():
             )
         ])
 
-    with logging_setup.threadbound():
 
-        # Output all stdout (print) messages as warnings
-        try:
-            sys.stdout = LoggerWriter(pyfalog.warning)
-        except:
-            pyfalog.critical("Cannot redirect.  Continuing without writing stdout to log.")
-
-        # Output all stderr (stacktrace) messages as critical
-        try:
-            sys.stderr = LoggerWriter(pyfalog.critical)
-        except:
-            pyfalog.critical("Cannot redirect.  Continuing without writing stderr to log.")
-
-
-class LoggerWriter(object):
+class LoggerWriter:
     def __init__(self, level):
         # self.level is really like using log.debug(message)
         # at least in my case

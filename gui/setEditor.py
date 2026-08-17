@@ -17,18 +17,20 @@
 # along with pyfa.    If not, see <http://www.gnu.org/licenses/>.
 # =============================================================================
 
-from logbook import Logger
 # noinspection PyPackageRequirements
 import wx
+from logbook import Logger
 
-from service.implantSet import ImplantSets
+from gui.auxWindow import AuxiliaryFrame
+from gui.builtinViews.entityEditor import BaseValidator, EntityEditor
 from gui.builtinViews.implantEditor import BaseImplantEditorView
-from gui.utils.clipboard import toClipboard, fromClipboard
-from gui.builtinViews.entityEditor import EntityEditor, BaseValidator
+from gui.utils.clipboard import fromClipboard, toClipboard
+from service.implantSet import ImplantSets
+
 
 pyfalog = Logger(__name__)
 
-
+_t = wx.GetTranslation
 class ImplantTextValidor(BaseValidator):
     def __init__(self):
         BaseValidator.__init__(self)
@@ -37,27 +39,27 @@ class ImplantTextValidor(BaseValidator):
         return ImplantTextValidor()
 
     def Validate(self, win):
-        entityEditor = win.parent
+        entityEditor = win.Parent.parent
         textCtrl = self.GetWindow()
         text = textCtrl.GetValue().strip()
 
         try:
             if len(text) == 0:
-                raise ValueError("You must supply a name for the Implant Set!")
+                raise ValueError(_t("You must supply a name for the Implant Set!"))
             elif text in [x.name for x in entityEditor.choices]:
-                raise ValueError("Imlplant Set name already in use, please choose another.")
+                raise ValueError(_t("Implant Set name already in use, please choose another."))
 
             return True
         except ValueError as e:
             pyfalog.error(e)
-            wx.MessageBox("{}".format(e), "Error")
+            wx.MessageBox("{}".format(e), _t("Error"))
             textCtrl.SetFocus()
             return False
 
 
 class ImplantSetEntityEditor(EntityEditor):
     def __init__(self, parent):
-        EntityEditor.__init__(self, parent, "Implant Set")
+        EntityEditor.__init__(self, parent, _t("Implant Set"))
         self.SetEditorValidator(ImplantTextValidor)
 
     def getEntitiesFromContext(self):
@@ -83,7 +85,8 @@ class ImplantSetEntityEditor(EntityEditor):
         sIS.deleteSet(entity)
 
 
-class ImplantSetEditor(BaseImplantEditorView):
+class ImplantSetEditorView(BaseImplantEditorView):
+
     def __init__(self, parent):
         BaseImplantEditorView.__init__(self, parent)
         if 'wxMSW' in wx.PlatformInfo:
@@ -103,7 +106,7 @@ class ImplantSetEditor(BaseImplantEditorView):
         sIS = ImplantSets.getInstance()
         set_ = self.Parent.entityEditor.getActiveEntity()
 
-        sIS.addImplant(set_.ID, item.ID)
+        sIS.addImplants(set_.ID, item.ID)
 
     def removeImplantFromContext(self, implant):
         sIS = ImplantSets.getInstance()
@@ -112,9 +115,12 @@ class ImplantSetEditor(BaseImplantEditorView):
         sIS.removeImplant(set_.ID, implant)
 
 
-class ImplantSetEditorDlg(wx.Dialog):
-    def __init__(self, parent):
-        wx.Dialog.__init__(self, parent, id=wx.ID_ANY, title="Implant Set Editor", size=wx.Size(640, 600))
+class ImplantSetEditor(AuxiliaryFrame):
+
+    def __init__(self, parent, dataToAdd=None):
+        super().__init__(
+            parent, id=wx.ID_ANY, title=_t("Implant Set Editor"), resizeable=True,
+            size=wx.Size(950, 500) if "wxGTK" in wx.PlatformInfo else wx.Size(850, 420))
 
         self.block = False
         self.SetSizeHints(wx.DefaultSize, wx.DefaultSize)
@@ -127,7 +133,7 @@ class ImplantSetEditorDlg(wx.Dialog):
         self.sl = wx.StaticLine(self)
         mainSizer.Add(self.sl, 0, wx.EXPAND | wx.TOP | wx.BOTTOM, 5)
 
-        self.iview = ImplantSetEditor(self)
+        self.iview = ImplantSetEditorView(self)
         mainSizer.Add(self.iview, 1, wx.ALL | wx.EXPAND, 5)
 
         self.slfooter = wx.StaticLine(self)
@@ -139,15 +145,10 @@ class ImplantSetEditorDlg(wx.Dialog):
         self.stNotice.Wrap(-1)
         footerSizer.Add(self.stNotice, 1, wx.BOTTOM | wx.TOP | wx.LEFT, 5)
 
-        if "wxGTK" in wx.PlatformInfo:
-            self.closeBtn = wx.Button(self, wx.ID_ANY, "Close", wx.DefaultPosition, wx.DefaultSize, 0)
-            mainSizer.Add(self.closeBtn, 0, wx.ALL | wx.ALIGN_RIGHT, 5)
-            self.closeBtn.Bind(wx.EVT_BUTTON, self.closeEvent)
+        importExport = ((_t("Import implant sets from clipboard"), wx.ART_FILE_OPEN, "Import"),
+                        (_t("Export implant sets to clipboard"), wx.ART_FILE_SAVE_AS, "Export"))
 
-        importExport = (("Import", wx.ART_FILE_OPEN, "from"),
-                        ("Export", wx.ART_FILE_SAVE_AS, "to"))
-
-        for name, art, direction in importExport:
+        for tooltip, art, attr in importExport:
             bitmap = wx.ArtProvider.GetBitmap(art, wx.ART_BUTTON)
             btn = wx.BitmapButton(self, wx.ID_ANY, bitmap)
 
@@ -155,35 +156,45 @@ class ImplantSetEditorDlg(wx.Dialog):
             btn.SetMaxSize(btn.GetSize())
 
             btn.Layout()
-            setattr(self, name, btn)
+            setattr(self, attr, btn)
             btn.Enable(True)
-            btn.SetToolTip("%s implant sets %s clipboard" % (name, direction))
-            footerSizer.Add(btn, 0, wx.ALIGN_CENTER_HORIZONTAL | wx.ALIGN_RIGHT)
+            btn.SetToolTip(tooltip)
+            footerSizer.Add(btn, 0)
 
         mainSizer.Add(footerSizer, 0, wx.ALL | wx.EXPAND, 5)
 
         self.SetSizer(mainSizer)
         self.Layout()
 
-        if not self.entityEditor.checkEntitiesExist():
-            self.Destroy()
+        if dataToAdd:
+            name, implants = dataToAdd
+            newSet = self.entityEditor.DoNew(name)
+            ImplantSets.getInstance().addImplants(newSet.ID, *[i.item.ID for i in implants])
+            self.entityEditor.refreshEntityList(newSet)
+            wx.PostEvent(self.entityEditor.entityChoices, wx.CommandEvent(wx.wxEVT_COMMAND_CHOICE_SELECTED))
+        elif not self.entityEditor.checkEntitiesExist():
+            self.Close()
             return
 
         self.Bind(wx.EVT_CHOICE, self.entityChanged)
+        self.Bind(wx.EVT_CHAR_HOOK, self.kbEvent)
 
         self.Import.Bind(wx.EVT_BUTTON, self.importPatterns)
         self.Export.Bind(wx.EVT_BUTTON, self.exportPatterns)
 
+        self.SetMinSize(self.GetSize())
         self.CenterOnParent()
-        self.ShowModal()
 
     def entityChanged(self, event):
         if not self.entityEditor.checkEntitiesExist():
-            self.Destroy()
+            self.Close()
             return
 
-    def closeEvent(self, event):
-        self.Destroy()
+    def kbEvent(self, event):
+        if event.GetKeyCode() == wx.WXK_ESCAPE and event.GetModifiers() == wx.MOD_NONE:
+            self.Close()
+            return
+        event.Skip()
 
     def __del__(self):
         pass
@@ -196,21 +207,23 @@ class ImplantSetEditorDlg(wx.Dialog):
             sIS = ImplantSets.getInstance()
             try:
                 sIS.importSets(text)
-                self.stNotice.SetLabel("Patterns successfully imported from clipboard")
+                self.stNotice.SetLabel(_t("Patterns successfully imported from clipboard"))
             except ImportError as e:
                 pyfalog.error(e)
                 self.stNotice.SetLabel(str(e))
+            except (KeyboardInterrupt, SystemExit):
+                raise
             except Exception as e:
                 pyfalog.error(e)
-                self.stNotice.SetLabel("Could not import from clipboard: unknown errors")
+                self.stNotice.SetLabel(_t("Could not import from clipboard: unknown errors"))
             finally:
                 self.entityEditor.refreshEntityList()
         else:
-            self.stNotice.SetLabel("Could not import from clipboard")
+            self.stNotice.SetLabel(_t("Could not import from clipboard"))
 
     def exportPatterns(self, event):
         """Event fired when export to clipboard button is clicked"""
 
         sIS = ImplantSets.getInstance()
         toClipboard(sIS.exportSets())
-        self.stNotice.SetLabel("Sets exported to clipboard")
+        self.stNotice.SetLabel(_t("Sets exported to clipboard"))

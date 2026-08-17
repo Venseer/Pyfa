@@ -24,40 +24,46 @@ from collections import OrderedDict
 
 # noinspection PyPackageRequirements
 import wx
+from logbook import Logger
 
 import config
 
-from logbook import Logger
-logging = Logger(__name__)
+
+pyfalog = Logger(__name__)
 
 
-class BitmapLoader(object):
-    # try:
-    #     archive = zipfile.ZipFile(os.path.join(config.pyfaPath, 'imgs.zip'), 'r')
-    #     logging.info("Using zipped image files.")
-    # except (IOError, TypeError):
-    #     logging.info("Using local image files.")
-    #     archive = None
-
-    logging.info("Using local image files.")
-    archive = None
+class BitmapLoader:
+    # Can be None if we're running from tests
+    if config.imgsZIP is None:
+        pyfalog.info("Using local image files.")
+        archive = None
+    else:
+        try:
+            archive = zipfile.ZipFile(config.imgsZIP, 'r')
+            pyfalog.info("Using zipped image files.")
+        except (IOError, TypeError):
+            pyfalog.info("Using local image files.")
+            archive = None
 
     cached_bitmaps = OrderedDict()
     dont_use_cached_bitmaps = False
     max_cached_bitmaps = 500
 
+    scaling_factor = None
+
     @classmethod
     def getStaticBitmap(cls, name, parent, location):
+        bitmap = cls.getBitmap(name or 0, location)
+        if bitmap is None:
+            return None
         static = wx.StaticBitmap(parent)
-        static.SetBitmap(cls.getBitmap(name, location))
+        static.SetBitmap(bitmap)
         return static
 
     @classmethod
     def getBitmap(cls, name, location):
         if cls.dont_use_cached_bitmaps:
-            img = cls.getImage(name, location)
-            if img is not None:
-                return img.ConvertToBitmap()
+            return cls.loadBitmap(name, location)
 
         path = "%s%s" % (name, location)
 
@@ -65,11 +71,7 @@ class BitmapLoader(object):
             cls.cached_bitmaps.popitem(False)
 
         if path not in cls.cached_bitmaps:
-            img = cls.getImage(name, location)
-            if img is not None:
-                bmp = img.ConvertToBitmap()
-            else:
-                bmp = None
+            bmp = cls.loadBitmap(name, location)
             cls.cached_bitmaps[path] = bmp
         else:
             bmp = cls.cached_bitmaps[path]
@@ -78,8 +80,52 @@ class BitmapLoader(object):
 
     @classmethod
     def getImage(cls, name, location):
-        filename = "{0}.png".format(name)
+        bmp = cls.getBitmap(name, location)
+        if bmp is not None:
+            return bmp.ConvertToImage()
+        else:
+            return None
 
+    @classmethod
+    def loadBitmap(cls, name, location):
+        if cls.scaling_factor is None:
+            cls.scaling_factor = 1 if 'wxGTK' in wx.PlatformInfo else int(wx.GetApp().GetTopWindow().GetContentScaleFactor())
+        scale = cls.scaling_factor
+
+        filename, img = cls.loadScaledBitmap(name, location, scale)
+
+        while img is None and scale > 0:
+            # can't find the correctly scaled image, fallback to smaller scales
+            scale -= 1
+            filename, img = cls.loadScaledBitmap(name, location, scale)
+
+        if img is None:
+            pyfalog.warning("Missing icon file: {0}/{1}".format(location, filename))
+            return None
+
+        if scale > 1:
+            return img.Scale(round(img.GetWidth() // scale), round(img.GetHeight() // scale)).ConvertToBitmap()
+        return img.ConvertToBitmap()
+
+    @classmethod
+    def loadScaledBitmap(cls, name, location, scale=0):
+        """Attempts to load a scaled bitmap.
+
+        Args:
+            name (str): TypeID or basename of the image being requested.
+            location (str): Path to a location that may contain the image.
+            scale (int): Scale factor of the image variant to load. If ``0``, attempts to load the unscaled variant.
+
+        Returns:
+            (str, wx.Image): Tuple of the filename that may have been loaded and the image at that location. The
+                filename will always be present, but the image may be ``None``.
+        """
+        filename = "{0}@{1}x.png".format(name, scale) if scale > 0 else "{0}.png".format(name)
+        img = cls.loadImage(filename, location)
+        return filename, img
+
+    @classmethod
+    def loadImage(cls, filename, location):
         if cls.archive:
             path = os.path.join(location, filename)
             if os.sep != "/" and os.sep in path:
@@ -87,14 +133,14 @@ class BitmapLoader(object):
 
             try:
                 img_data = cls.archive.read(path)
-                sbuf = io.StringIO(img_data)
-                return wx.ImageFromStream(sbuf)
+                bbuf = io.BytesIO(img_data)
+                return wx.Image(bbuf)
             except KeyError:
-                print(("Missing icon file from zip: {0}".format(path)))
+                pyfalog.warning("Missing icon file from zip: {0}".format(path))
         else:
             path = os.path.join(config.pyfaPath, 'imgs' + os.sep + location + os.sep + filename)
 
             if os.path.exists(path):
                 return wx.Image(path)
             else:
-                print(("Missing icon file: {0}".format(path)))
+                return None

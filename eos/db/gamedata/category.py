@@ -17,22 +17,23 @@
 # along with eos.  If not, see <http://www.gnu.org/licenses/>.
 # ===============================================================================
 
-from sqlalchemy import Column, String, Integer, ForeignKey, Boolean, Table
-from sqlalchemy.orm import relation, mapper, synonym, deferred
+from sqlalchemy import Boolean, Column, Integer, String, Table
+from sqlalchemy.orm import deferred, mapper, synonym
 
 from eos.db import gamedata_meta
 from eos.gamedata import Category
+import eos.config
 
 categories_table = Table("invcategories", gamedata_meta,
                          Column("categoryID", Integer, primary_key=True),
-                         Column("categoryName", String),
-                         Column("description", String),
+                         *[Column("name{}".format(lang), String) for lang in eos.config.translation_mapping.values()],
+                         # Column("description", String), # deprecated
                          Column("published", Boolean),
                          Column("iconID", Integer))
 
 mapper(Category, categories_table,
        properties={
            "ID"         : synonym("categoryID"),
-           "name"       : synonym("categoryName"),
-           "description": deferred(categories_table.c.description)
+           "displayName": synonym("name{}".format(eos.config.lang)),
+           # "description": deferred(categories_table.c.description) # deprecated
        })

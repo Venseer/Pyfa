@@ -26,9 +26,11 @@ import gui.mainFrame
 from gui.chrome_tabs import EVT_NOTEBOOK_PAGE_CHANGED
 from gui.utils import fonts
 
-from eos.saveddata.module import Hardpoint
+from eos.const import FittingHardpoint
 
 from gui.utils.numberFormatter import formatAmount
+
+_t = wx.GetTranslation
 
 
 class ResourcesViewFull(StatsView):
@@ -49,6 +51,7 @@ class ResourcesViewFull(StatsView):
             self.toggleContext("fighter")
         else:
             self.toggleContext("drone")
+        event.Skip()
 
     def toggleContext(self, context):
         # Apparently you cannot .Hide(True) on a Window, otherwise I would just .Hide(context !== x).
@@ -78,7 +81,7 @@ class ResourcesViewFull(StatsView):
         self.headerPanel.Layout()
 
     def getHeaderText(self, fit):
-        return "Resources"
+        return _t("Resources")
 
     def getTextExtentW(self, text):
         width, height = self.parent.GetTextExtent(text)
@@ -104,8 +107,13 @@ class ResourcesViewFull(StatsView):
         base = sizerResources
         sizer.AddStretchSpacer()
         # Turrets & launcher hardslots display
-        tooltipText = {"turret": "Turret hardpoints", "launcher": "Launcher hardpoints", "drones": "Drones active",
-                       "fighter": "Fighter squadrons active", "calibration": "Calibration"}
+        tooltipText = {
+            "turret": _t("Turret hardpoints"),
+            "launcher": _t("Launcher hardpoints"),
+            "drones": _t("Drones active"),
+            "fighter": _t("Fighter squadrons active"),
+            "calibration": _t("Calibration")
+        }
         for type_ in ("turret", "launcher", "drones", "fighter", "calibration"):
             box = wx.BoxSizer(wx.HORIZONTAL)
 
@@ -117,8 +125,10 @@ class ResourcesViewFull(StatsView):
 
             sizer.Add(box, 0, wx.ALIGN_CENTER)
 
-            suffix = {'turret': 'Hardpoints', 'launcher': 'Hardpoints', 'drones': 'Active', 'fighter': 'Tubes',
-                      'calibration': 'Points'}
+            suffix = {
+                'turret': 'Hardpoints', 'launcher': 'Hardpoints', 'drones': 'Active', 'fighter': 'Tubes',
+                'calibration': 'Points'
+            }
             lbl = wx.StaticText(parent, wx.ID_ANY, "0")
             setattr(self, "label%sUsed%s%s" % (panel.capitalize(), type_.capitalize(), suffix[type_].capitalize()), lbl)
             box.Add(lbl, 0, wx.ALIGN_CENTER | wx.LEFT, 5)
@@ -139,8 +149,14 @@ class ResourcesViewFull(StatsView):
         gauge_font = wx.Font(fonts.NORMAL, wx.SWISS, wx.NORMAL, wx.NORMAL, False)
 
         # PG, Cpu & drone stuff
-        tooltipText = {"cpu": "CPU", "pg": "PowerGrid", "droneBay": "Drone bay", "fighterBay": "Fighter bay",
-                       "droneBandwidth": "Drone bandwidth", "cargoBay": "Cargo bay"}
+        tooltipText = {
+            "cpu": _t("CPU"),
+            "pg": _t("PowerGrid"),
+            "droneBay": _t("Drone bay"),
+            "fighterBay": _t("Fighter bay"),
+            "droneBandwidth": _t("Drone bandwidth"),
+            "cargoBay": _t("Cargo bay")
+        }
         for i, group in enumerate((("cpu", "pg"), ("cargoBay", "droneBay", "fighterBay", "droneBandwidth"))):
             main = wx.BoxSizer(wx.VERTICAL)
             base.Add(main, 1, wx.ALIGN_CENTER)
@@ -196,14 +212,14 @@ class ResourcesViewFull(StatsView):
         # If we did anything intresting, we'd update our labels to reflect the new fit's stats here
 
         stats = (
-            ("label%sUsedTurretHardpoints", lambda: fit.getHardpointsUsed(Hardpoint.TURRET), 0, 0, 0),
+            ("label%sUsedTurretHardpoints", lambda: fit.getHardpointsUsed(FittingHardpoint.TURRET), 0, 0, 0),
             ("label%sTotalTurretHardpoints", lambda: fit.ship.getModifiedItemAttr('turretSlotsLeft'), 0, 0, 0),
-            ("label%sUsedLauncherHardpoints", lambda: fit.getHardpointsUsed(Hardpoint.MISSILE), 0, 0, 0),
+            ("label%sUsedLauncherHardpoints", lambda: fit.getHardpointsUsed(FittingHardpoint.MISSILE), 0, 0, 0),
             ("label%sTotalLauncherHardpoints", lambda: fit.ship.getModifiedItemAttr('launcherSlotsLeft'), 0, 0, 0),
             ("label%sUsedDronesActive", lambda: fit.activeDrones, 0, 0, 0),
             ("label%sTotalDronesActive", lambda: fit.extraAttributes["maxActiveDrones"], 0, 0, 0),
             ("label%sUsedFighterTubes", lambda: fit.fighterTubesUsed, 3, 0, 9),
-            ("label%sTotalFighterTubes", lambda: fit.ship.getModifiedItemAttr("fighterTubes"), 3, 0, 9),
+            ("label%sTotalFighterTubes", lambda: fit.fighterTubesTotal, 3, 0, 9),
             ("label%sUsedCalibrationPoints", lambda: fit.calibrationUsed, 0, 0, 0),
             ("label%sTotalCalibrationPoints", lambda: fit.ship.getModifiedItemAttr('upgradeCapacity'), 0, 0, 0),
             ("label%sUsedPg", lambda: fit.pgUsed, 4, 0, 9),
@@ -284,6 +300,8 @@ class ResourcesViewFull(StatsView):
             else:
                 label.SetLabel(formatAmount(value, prec, lowest, highest))
                 label.SetToolTip(wx.ToolTip("%.1f" % value))
+            # See issue #1877
+            label.InvalidateBestSize()
 
         colorWarn = wx.Colour(204, 51, 51)
         colorNormal = wx.SystemSettings.GetColour(wx.SYS_COLOUR_WINDOWTEXT)
@@ -319,6 +337,8 @@ class ResourcesViewFull(StatsView):
         labelTFT.SetForegroundColour(colorF)
         labelUCP.SetForegroundColour(colorC)
         labelTCP.SetForegroundColour(colorC)
+        labelUCP.Refresh()
+        labelTCP.Refresh()
 
         if fit is not None:
             resMax = (

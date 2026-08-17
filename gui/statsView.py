@@ -18,7 +18,7 @@
 # =============================================================================
 
 
-class StatsView(object):
+class StatsView:
     views = {}
 
     def __init__(self):
@@ -51,6 +51,7 @@ from gui.builtinStatsViews import (  # noqa: E402, F401
     capacitorViewFull,
     rechargeViewFull,
     targetingMiscViewMinimal,
+    bombingViewFull,
     priceViewFull,
     priceViewMinimal,
     outgoingViewFull,

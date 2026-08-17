@@ -1,4 +1,4 @@
-#!/usr/bin/env python
+#!/usr/bin/env python3
 # ==============================================================================
 # Copyright (C) 2010 Diego Duclos
 #
@@ -19,13 +19,15 @@
 # ==============================================================================
 
 
+import datetime
 import os
 import sys
-import traceback
 from optparse import AmbiguousOptionError, BadOptionError, OptionParser
-from service.prereqsCheck import PreCheckException, PreCheckMessage, version_precheck, version_block
+
 import config
-import datetime
+from service.prereqsCheck import PreCheckException, PreCheckMessage, version_block, version_precheck
+from db_update import db_needs_update, update_db
+
 
 # ascii_text = '''
 # ++++++++++++++++++++++++++++++++++++++++++++++++++
@@ -71,6 +73,7 @@ parser.add_option("-t", "--title", action="store", dest="title", help="Set Windo
 parser.add_option("-s", "--savepath", action="store", dest="savepath", help="Set the folder for savedata", default=None)
 parser.add_option("-l", "--logginglevel", action="store", dest="logginglevel", help="Set desired logging level [Critical|Error|Warning|Info|Debug]", default="Error")
 parser.add_option("-p", "--profile", action="store", dest="profile_path", help="Set location to save profileing.", default=None)
+parser.add_option("-i", "--language", action="store", dest="language", help="Sets the language for pyfa. Overrides user's saved settings. Format: xx_YY (eg: en_US). If translation doesn't exist, defaults to en_US", default=None)
 
 (options, args) = parser.parse_args()
 
@@ -88,6 +91,7 @@ if __name__ == "__main__":
     import wx
 
     from logbook import Logger
+
     pyfalog = Logger(__name__)
 
     from gui.errorDialog import ErrorHandler
@@ -100,6 +104,9 @@ if __name__ == "__main__":
 
     config.debug = options.debug
     config.loggingLevel = config.LOGLEVEL_MAP.get(options.logginglevel.lower(), config.LOGLEVEL_MAP['error'])
+
+    config.language = options.language
+
     config.defPaths(options.savepath)
     config.defLogging()
 
@@ -115,6 +122,9 @@ if __name__ == "__main__":
         else:
             pyfalog.info("Running in a thawed state.")
 
+        if db_needs_update() is True:
+            update_db()
+
         # Lets get to the good stuff, shall we?
         import eos.db
         import eos.events  # todo: move this to eos initialization?
@@ -127,24 +137,51 @@ if __name__ == "__main__":
             os.mkdir(config.savePath)
 
         eos.db.saveddata_meta.create_all()
-
-        from gui.mainFrame import MainFrame
+        from gui.app import PyfaApp
 
         # set title if it wasn't supplied by argument
         if options.title is None:
             options.title = "pyfa %s - Python Fitting Assistant" % (config.getVersion())
 
-        pyfa = wx.App(False)
+        pyfa = PyfaApp(False)
+
+        from gui.mainFrame import MainFrame
+
         mf = MainFrame(options.title)
         ErrorHandler.SetParent(mf)
+
+        # Start ESI token validation, this helps avoid token expiry
+        try:
+            from service.esi import Esi
+            esi = Esi.getInstance()
+            esi.startTokenValidation()
+            pyfalog.info("ESI token validation started")
+        except (KeyboardInterrupt, SystemExit):
+            raise
+        except Exception as e:
+            pyfalog.warning(f"failed to start ESI token validation thread:\n{e}")
 
         if options.profile_path:
             profile_path = os.path.join(options.profile_path, 'pyfa-{}.profile'.format(datetime.datetime.now().strftime('%Y%m%d_%H%M%S')))
             pyfalog.debug("Starting pyfa with a profiler, saving to {}".format(profile_path))
             import cProfile
+
             cProfile.run('pyfa.MainLoop()', profile_path)
         else:
             pyfa.MainLoop()
 
-        # TODO: Add some thread cleanup code here. Right now we bail, and that can lead to orphaned threads or threads not properly exiting.
+        # When main loop is over, threads have 5 seconds to comply...
+        import threading
+        from utils.timer import CountdownTimer
+
+        timer = CountdownTimer(1)
+        stoppableThreads = []
+        for t in threading.enumerate():
+            if t is not threading.main_thread() and hasattr(t, 'stop'):
+                stoppableThreads.append(t)
+                t.stop()
+        for t in stoppableThreads:
+            t.join(timeout=timer.remainder())
+
+        # Nah, just kidding, no way to terminate threads - just try to exit
         sys.exit()

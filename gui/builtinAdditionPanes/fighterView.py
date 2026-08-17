@@ -20,16 +20,25 @@
 # noinspection PyPackageRequirements
 import wx
 
-import gui.globalEvents as GE
-from gui.builtinMarketBrowser.events import ItemSelected, ITEM_SELECTED
-import gui.mainFrame
 import gui.display as d
+import gui.fitCommands as cmd
+import gui.globalEvents as GE
+import gui.mainFrame
+from eos.const import FittingSlot
+from gui.builtinMarketBrowser.events import ItemSelected, ITEM_SELECTED
 from gui.builtinViewColumns.state import State
-from eos.saveddata.module import Slot
 from gui.contextMenu import ContextMenu
+from gui.fitCommands.helpers import getSimilarFighters
 from gui.utils.staticHelpers import DragDropHelper
 from service.fit import Fit
 from service.market import Market
+
+
+FIGHTER_ORDER = (
+    'Light Fighter', 'Structure Light Fighter',
+    'Heavy Fighter', 'Structure Heavy Fighter',
+    'Support Fighter', 'Structure Support Fighter')
+_t = wx.GetTranslation
 
 
 class FighterViewDrop(wx.DropTarget):
@@ -43,16 +52,21 @@ class FighterViewDrop(wx.DropTarget):
     def OnData(self, x, y, t):
         if self.GetData():
             dragged_data = DragDropHelper.data
+
+            if dragged_data is None:
+                return t
+
             data = dragged_data.split(':')
             self.dropFn(x, y, data)
         return t
 
 
 class FighterView(wx.Panel):
+
     def __init__(self, parent):
         wx.Panel.__init__(self, parent, id=wx.ID_ANY, pos=wx.DefaultPosition, style=wx.TAB_TRAVERSAL)
         self.mainFrame = gui.mainFrame.MainFrame.getInstance()
-        self.labels = ["Light", "Heavy", "Support"]
+        self.labels = [("Light", _t("Light")), ("Heavy", _t("Heavy")), ("Support", _t("Support"))]
 
         mainSizer = wx.BoxSizer(wx.VERTICAL)
 
@@ -62,18 +76,18 @@ class FighterView(wx.Panel):
         textSizer = wx.BoxSizer(wx.HORIZONTAL)
         textSizer.AddStretchSpacer()
 
-        for x in self.labels:
-            lbl = wx.StaticText(self, wx.ID_ANY, x.capitalize())
+        for attr, label in self.labels:
+            lbl = wx.StaticText(self, wx.ID_ANY, label)
             textSizer.Add(lbl, 0, wx.ALIGN_CENTER | wx.LEFT, 5)
 
             lbl = wx.StaticText(self, wx.ID_ANY, "0")
-            setattr(self, "label%sUsed" % (x.capitalize()), lbl)
+            setattr(self, "label%sUsed" % attr, lbl)
             textSizer.Add(lbl, 0, wx.ALIGN_CENTER | wx.LEFT, 5)
 
             textSizer.Add(wx.StaticText(self, wx.ID_ANY, "/"), 0, wx.ALIGN_CENTER)
 
             lbl = wx.StaticText(self, wx.ID_ANY, "0")
-            setattr(self, "label%sTotal" % (x.capitalize()), lbl)
+            setattr(self, "label%sTotal" % attr, lbl)
             textSizer.Add(lbl, 0, wx.ALIGN_CENTER)
             textSizer.AddStretchSpacer()
 
@@ -85,16 +99,20 @@ class FighterView(wx.Panel):
         self.mainFrame.Bind(GE.FIT_CHANGED, self.fitChanged)
 
     def fitChanged(self, event):
-        sFit = Fit.getInstance()
+        event.Skip()
         activeFitID = self.mainFrame.getActiveFit()
+        if activeFitID is not None and activeFitID not in event.fitIDs:
+            return
+
+        sFit = Fit.getInstance()
         fit = sFit.getFit(activeFitID)
 
         if fit:
-            for x in self.labels:
+            for x, _ in self.labels:
                 if fit.isStructure:
-                    slot = getattr(Slot, "FS_{}".format(x.upper()))
+                    slot = getattr(FittingSlot, "FS_{}".format(x.upper()))
                 else:
-                    slot = getattr(Slot, "F_{}".format(x.upper()))
+                    slot = getattr(FittingSlot, "F_{}".format(x.upper()))
                 used = fit.getSlotsUsed(slot)
                 total = fit.getNumSlots(slot)
                 color = wx.Colour(204, 51, 51) if used > total else wx.SystemSettings.GetColour(
@@ -110,10 +128,29 @@ class FighterView(wx.Panel):
 
             self.Refresh()
 
-        event.Skip()
+    def getTabExtraText(self):
+        fitID = self.mainFrame.getActiveFit()
+        if fitID is None:
+            return None
+        sFit = Fit.getInstance()
+        fit = sFit.getFit(fitID)
+        if fit is None:
+            return None
+        opt = sFit.serviceFittingOptions["additionsLabels"]
+        # Amount of active fighter squads
+        if opt == 1:
+            amount = len([f for f in fit.fighters if f.active])
+            return ' ({})'.format(amount) if amount else None
+        # Total amount of fighter squads
+        elif opt == 2:
+            amount = len(fit.fighters)
+            return ' ({})'.format(amount) if amount else None
+        else:
+            return None
 
 
 class FighterDisplay(d.Display):
+
     DEFAULT_COLS = ["State",
                     # "Base Icon",
                     "Base Name",
@@ -121,12 +158,14 @@ class FighterDisplay(d.Display):
                     # "Max Range",
                     # "Miscellanea",
                     "attr:maxVelocity",
-                    "Fighter Abilities"
-                    # "Price",
+                    "Drone HP",
+                    "Drone Regen",
+                    "Fighter Abilities",
+                    "Price",
                     ]
 
     def __init__(self, parent):
-        d.Display.__init__(self, parent, style=wx.LC_SINGLE_SEL | wx.BORDER_NONE)
+        d.Display.__init__(self, parent, style=wx.BORDER_NONE)
 
         self.lastFitId = None
 
@@ -135,16 +174,13 @@ class FighterDisplay(d.Display):
 
         self.mainFrame.Bind(GE.FIT_CHANGED, self.fitChanged)
         self.mainFrame.Bind(ITEM_SELECTED, self.addItem)
-        self.Bind(wx.EVT_LEFT_DCLICK, self.removeItem)
+        self.Bind(wx.EVT_LEFT_DCLICK, self.onLeftDoubleClick)
         self.Bind(wx.EVT_LEFT_DOWN, self.click)
         self.Bind(wx.EVT_KEY_UP, self.kbEvent)
         self.Bind(wx.EVT_MOTION, self.OnMouseMove)
         self.Bind(wx.EVT_LEAVE_WINDOW, self.OnLeaveWindow)
 
-        if "__WXGTK__" in wx.PlatformInfo:
-            self.Bind(wx.EVT_RIGHT_UP, self.scheduleMenu)
-        else:
-            self.Bind(wx.EVT_RIGHT_DOWN, self.scheduleMenu)
+        self.Bind(wx.EVT_CONTEXT_MENU, self.spawnMenu)
 
         self.Bind(wx.EVT_LIST_BEGIN_DRAG, self.startDrag)
         self.SetDropTarget(FighterViewDrop(self.handleDragDrop))
@@ -164,7 +200,10 @@ class FighterDisplay(d.Display):
                 self.hoveredRow = row
                 self.hoveredColumn = col
                 if row != -1 and col != -1 and col < len(self.DEFAULT_COLS):
-                    mod = self.fighters[self.GetItemData(row)]
+                    try:
+                        mod = self.fighters[row]
+                    except IndexError:
+                        return
                     if self.DEFAULT_COLS[col] == "Miscellanea":
                         tooltip = self.activeColumns[col].getToolTip(mod)
                         if tooltip is not None:
@@ -179,17 +218,22 @@ class FighterDisplay(d.Display):
 
     def kbEvent(self, event):
         keycode = event.GetKeyCode()
-        if keycode == wx.WXK_DELETE or keycode == wx.WXK_NUMPAD_DELETE:
-            row = self.GetFirstSelected()
-            if row != -1:
-                fighter = self.fighters[self.GetItemData(row)]
-                self.removeFighter(fighter)
-
+        modifiers = event.GetModifiers()
+        if keycode == wx.WXK_ESCAPE and modifiers == wx.MOD_NONE:
+            self.unselectAll()
+        elif keycode == 65 and modifiers == wx.MOD_CONTROL:
+            self.selectAll()
+        elif keycode in (wx.WXK_DELETE, wx.WXK_NUMPAD_DELETE) and modifiers == wx.MOD_NONE:
+            fighters = self.getSelectedFighters()
+            self.removeFighters(fighters)
         event.Skip()
 
     def startDrag(self, event):
         row = event.GetIndex()
         if row != -1:
+            self.unselectAll()
+            self.Select(row, True)
+
             data = wx.TextDataObject()
             dataStr = "fighter:" + str(row)
             data.SetText(dataStr)
@@ -219,103 +263,146 @@ class FighterDisplay(d.Display):
     def _merge(src, dst):
         return
 
-    '''
-    DRONE_ORDER = ('Light Scout Drones', 'Medium Scout Drones',
-                   'Heavy Attack Drones', 'Sentry Drones', 'Fighters',
-                   'Fighter Bombers', 'Combat Utility Drones',
-                   'Electronic Warfare Drones', 'Logistic Drones', 'Mining Drones', 'Salvage Drones',
-                   'Light Fighters', 'Heavy Fighters', 'Support Fighters')
-    def droneKey(self, drone):
-        sMkt = Market.getInstance()
-
-        groupName = sMkt.getMarketGroupByItem(drone.item).name
-        print groupName
-        return (self.DRONE_ORDER.index(groupName),
-                drone.item.name)
-    '''
+    @staticmethod
+    def fighterKey(fighter):
+        groupName = Market.getInstance().getGroupByItem(fighter.item).name
+        orderPos = FIGHTER_ORDER.index(groupName)
+        # Sort support fighters by name, ignore their abilities
+        if groupName == 'Support Fighter':
+            abilityEffectIDs = ()
+        # Group up fighters from various roles
+        else:
+            abilityEffectIDs = sorted(a.effectID for a in fighter.abilities)
+        return orderPos, abilityEffectIDs, fighter.item.name
 
     def fitChanged(self, event):
+        event.Skip()
+        activeFitID = self.mainFrame.getActiveFit()
+        if activeFitID is not None and activeFitID not in event.fitIDs:
+            return
+
         sFit = Fit.getInstance()
-        fit = sFit.getFit(event.fitID)
+        fit = sFit.getFit(activeFitID)
 
         self.Parent.Parent.Parent.DisablePage(self.Parent, not fit)
 
         # Clear list and get out if current fitId is None
-        if event.fitID is None and self.lastFitId is not None:
+        if activeFitID is None and self.lastFitId is not None:
             self.DeleteAllItems()
             self.lastFitId = None
-            event.Skip()
             return
 
         self.original = fit.fighters if fit is not None else None
-        self.fighters = stuff = fit.fighters[:] if fit is not None else None
+        self.fighters = fit.fighters[:] if fit is not None else None
 
-        '''
-        if stuff is not None:
-            stuff.sort(key=self.droneKey)
-        '''
+        if self.fighters is not None:
+            self.fighters.sort(key=self.fighterKey)
 
-        if event.fitID != self.lastFitId:
-            self.lastFitId = event.fitID
+        if activeFitID != self.lastFitId:
+            self.lastFitId = activeFitID
 
             item = self.GetNextItem(-1, wx.LIST_NEXT_ALL, wx.LIST_STATE_DONTCARE)
 
             if item != -1:
                 self.EnsureVisible(item)
 
-            self.deselectItems()
+            self.unselectAll()
 
-        self.update(stuff)
-        event.Skip()
+        self.update(self.fighters)
 
     def addItem(self, event):
-        sFit = Fit.getInstance()
+        item = Market.getInstance().getItem(event.itemID, eager='group.category')
+        if item is None or not item.isFighter:
+            event.Skip()
+            return
+
         fitID = self.mainFrame.getActiveFit()
-        trigger = sFit.addFighter(fitID, event.itemID)
-        if trigger:
-            wx.PostEvent(self.mainFrame, GE.FitChanged(fitID=fitID))
-            self.mainFrame.additionsPane.select("Fighters")
+        if self.mainFrame.command.Submit(cmd.GuiAddLocalFighterCommand(fitID, event.itemID)):
+            self.mainFrame.additionsPane.select('Fighters')
 
         event.Skip()
 
-    def removeItem(self, event):
+    def onLeftDoubleClick(self, event):
         row, _ = self.HitTest(event.Position)
         if row != -1:
             col = self.getColumn(event.Position)
             if col != self.getColIndex(State):
-                fighter = self.fighters[self.GetItemData(row)]
-                self.removeFighter(fighter)
+                try:
+                    fighter = self.fighters[row]
+                except IndexError:
+                    return
+                if event.GetModifiers() == wx.MOD_ALT:
+                    fighters = getSimilarFighters(self.original, fighter)
+                else:
+                    fighters = [fighter]
+                self.removeFighters(fighters)
 
-    def removeFighter(self, fighter):
+    def removeFighters(self, fighters):
         fitID = self.mainFrame.getActiveFit()
-        sFit = Fit.getInstance()
-        sFit.removeFighter(fitID, self.original.index(fighter))
-        wx.PostEvent(self.mainFrame, GE.FitChanged(fitID=fitID))
+        positions = []
+        for fighter in fighters:
+            if fighter in self.original:
+                positions.append(self.original.index(fighter))
+        self.mainFrame.command.Submit(cmd.GuiRemoveLocalFightersCommand(fitID=fitID, positions=positions))
 
     def click(self, event):
-        event.Skip()
-        row, _ = self.HitTest(event.Position)
-        if row != -1:
+        mainRow, _ = self.HitTest(event.Position)
+        if mainRow != -1:
             col = self.getColumn(event.Position)
             if col == self.getColIndex(State):
                 fitID = self.mainFrame.getActiveFit()
-                sFit = Fit.getInstance()
-                fighter = self.fighters[row]
-                sFit.toggleFighter(fitID, self.original.index(fighter))
-                wx.PostEvent(self.mainFrame, GE.FitChanged(fitID=fitID))
-
-    def scheduleMenu(self, event):
+                try:
+                    mainFighter = self.fighters[mainRow]
+                except IndexError:
+                    return
+                if mainFighter in self.original:
+                    mainPosition = self.original.index(mainFighter)
+                    positions = []
+                    if event.GetModifiers() == wx.MOD_ALT:
+                        for fighter in getSimilarFighters(self.original, mainFighter):
+                            positions.append(self.original.index(fighter))
+                    else:
+                        for row in self.getSelectedRows():
+                            try:
+                                fighter = self.fighters[row]
+                            except IndexError:
+                                continue
+                            if fighter in self.original:
+                                positions.append(self.original.index(fighter))
+                    if mainPosition not in positions:
+                        positions = [mainPosition]
+                    self.mainFrame.command.Submit(cmd.GuiToggleLocalFighterStatesCommand(
+                        fitID=fitID,
+                        mainPosition=mainPosition,
+                        positions=positions))
+                    return
         event.Skip()
-        if self.getColumn(event.Position) != self.getColIndex(State):
-            wx.CallAfter(self.spawnMenu)
 
-    def spawnMenu(self):
-        sel = self.GetFirstSelected()
-        if sel != -1:
-            fighter = self.fighters[sel]
+    def spawnMenu(self, event):
+        clickedPos = self.getRowByAbs(event.Position)
+        self.ensureSelection(clickedPos)
 
-            sMkt = Market.getInstance()
-            sourceContext = "fighterItem"
-            itemContext = sMkt.getCategoryByItem(fighter.item).name
-            menu = ContextMenu.getMenu((fighter,), (sourceContext, itemContext))
+        selection = self.getSelectedFighters()
+        mainFighter = None
+        if clickedPos != -1:
+            try:
+                fighter = self.fighters[clickedPos]
+            except IndexError:
+                pass
+            else:
+                if fighter in self.original:
+                    mainFighter = fighter
+        itemContext = None if mainFighter is None else Market.getInstance().getCategoryByItem(mainFighter.item).displayName
+        menu = ContextMenu.getMenu(self, mainFighter, selection, ("fighterItem", itemContext), ("fighterItemMisc", itemContext))
+        if menu:
             self.PopupMenu(menu)
+
+    def getSelectedFighters(self):
+        fighters = []
+        for row in self.getSelectedRows():
+            try:
+                fighter = self.fighters[row]
+            except IndexError:
+                continue
+            fighters.append(fighter)
+        return fighters

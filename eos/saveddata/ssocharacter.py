@@ -24,11 +24,12 @@ import time
 # from tomorrow import threads
 
 
-class SsoCharacter(object):
-    def __init__(self, charID, name, client, accessToken=None, refreshToken=None):
+class SsoCharacter:
+    def __init__(self, charID, name, client, server, accessToken=None, refreshToken=None):
         self.characterID = charID
         self.characterName = name
         self.client = client
+        self.server = server
         self.accessToken = accessToken
         self.refreshToken = refreshToken
         self.accessTokenExpires = None
@@ -37,6 +38,9 @@ class SsoCharacter(object):
     def init(self):
         pass
 
+    @property
+    def characterDisplay(self):
+        return "{} [{}]".format(self.characterName, self.server)
     def is_token_expired(self):
         if self.accessTokenExpires is None:
             return True

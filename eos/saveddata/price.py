@@ -18,33 +18,57 @@
 # along with eos.  If not, see <http://www.gnu.org/licenses/>.
 # ===============================================================================
 
-import time
 
-from sqlalchemy.orm import reconstructor
+from enum import IntEnum, unique
+from time import time
+
 from logbook import Logger
+
+
+VALIDITY = 24 * 60 * 60  # Price validity period, 24 hours
+REREQUEST = 4 * 60 * 60  # Re-request delay for failed fetches, 4 hours
+TIMEOUT = 15 * 60  # Network timeout delay for connection issues, 15 minutes
+
 
 pyfalog = Logger(__name__)
 
 
-class Price(object):
+@unique
+class PriceStatus(IntEnum):
+    initialized = 0
+    notSupported = 1
+    fetchSuccess = 2
+    fetchFail = 3
+    fetchTimeout = 4
+
+
+class Price:
     def __init__(self, typeID):
         self.typeID = typeID
         self.time = 0
-        self.__price = 0
-        self.failed = None
+        self.price = 0
+        self.status = PriceStatus.initialized
 
-    @reconstructor
-    def init(self):
-        self.__item = None
+    def isValid(self, validityOverride=None):
+        # Always attempt to update prices which were just initialized, and prices
+        # of unsupported items (maybe we start supporting them at some point)
+        if self.status in (PriceStatus.initialized, PriceStatus.notSupported):
+            return False
+        elif self.status == PriceStatus.fetchSuccess:
+            return time() <= self.time + (validityOverride if validityOverride is not None else VALIDITY)
+        elif self.status == PriceStatus.fetchFail:
+            return time() <= self.time + REREQUEST
+        elif self.status == PriceStatus.fetchTimeout:
+            return time() <= self.time + TIMEOUT
+        else:
+            return False
 
-    @property
-    def isValid(self):
-        return self.time >= time.time()
-
-    @property
-    def price(self):
-        return self.__price or 0.0
-
-    @price.setter
-    def price(self, price):
-        self.__price = price
+    def update(self, status, price=0):
+        # Keep old price if we failed to fetch new one
+        if status in (PriceStatus.fetchFail, PriceStatus.fetchTimeout):
+            price = self.price
+        elif status != PriceStatus.fetchSuccess:
+            price = 0
+        self.time = time()
+        self.price = price
+        self.status = status

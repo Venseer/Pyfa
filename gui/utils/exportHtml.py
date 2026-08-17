@@ -2,6 +2,7 @@ import threading
 import time
 # noinspection PyPackageRequirements
 import wx
+from service.const import PortEftOptions
 from service.settings import HTMLExportSettings
 from service.fit import Fit
 from service.port import Port
@@ -12,7 +13,7 @@ from eos.db import getFit
 pyfalog = Logger(__name__)
 
 
-class exportHtml(object):
+class exportHtml:
     _instance = None
 
     @classmethod
@@ -25,20 +26,20 @@ class exportHtml(object):
     def __init__(self):
         self.thread = exportHtmlThread()
 
-    def refreshFittingHtml(self, force=False, callback=False):
+    def refreshFittingHtml(self, force=False, progress=None):
         settings = HTMLExportSettings.getInstance()
 
         if force or settings.getEnabled():
             self.thread.stop()
-            self.thread = exportHtmlThread(callback)
+            self.thread = exportHtmlThread(progress)
             self.thread.start()
 
 
 class exportHtmlThread(threading.Thread):
-    def __init__(self, callback=False):
+    def __init__(self, progress=False):
         threading.Thread.__init__(self)
         self.name = "HTMLExport"
-        self.callback = callback
+        self.progress = progress
         self.stopRunning = False
 
     def stop(self):
@@ -67,13 +68,17 @@ class exportHtmlThread(threading.Thread):
             FILE.write(HTML)
             FILE.close()
         except IOError as ex:
-            print(("Failed to write to " + settings.getPath()))
+            pyfalog.warning("Failed to write to " + settings.getPath())
             pass
-        except Exception as ex:
-            pass
-
-        if self.callback:
-            wx.CallAfter(self.callback, -1)
+        except (KeyboardInterrupt, SystemExit):
+            raise
+        except Exception as e:
+            if self.progress:
+                self.progress.error = f'{e}'
+        finally:
+            if self.progress:
+                self.progress.current += 1
+                self.progress.workerWorking = False
 
     def generateFullHTML(self, sMkt, sFit, dnaUrl):
         """ Generate the complete HTML with styling and javascript """
@@ -168,13 +173,13 @@ class exportHtmlThread(threading.Thread):
 </head>
 <body>
 <div  id="canvas" data-role="page">
+<div style="text-align: center;"><strong>Last updated:</strong> %s <small>(<span class="timer"></span>)</small></div>
   <div data-role="header">
-    <h1>Pyfa fits</h1>
+    <h1>Pyfa fits by Group</h1>
   </div>
   <div data-role="content">
-  <div style="text-align: center;"><strong>Last updated:</strong> %s <small>(<span class="timer"></span>)</small></div>
-
 """ % (time.time(), dnaUrl, localDate)
+        
         HTML += '  <ul data-role="listview" class="ui-listview-outer" data-inset="true" data-filter="true">\n'
         categoryList = list(sMkt.getShipRoot())
         categoryList.sort(key=lambda _ship: _ship.name)
@@ -208,8 +213,12 @@ class exportHtmlThread(threading.Thread):
                         if self.stopRunning:
                             return
                         try:
-                            eftFit = Port.exportEft(getFit(fit[0]))
-                            print(eftFit)
+                            eftFit = Port.exportEft(getFit(fit[0]), options={
+                                PortEftOptions.IMPLANTS: True,
+                                PortEftOptions.MUTATIONS: True,
+                                PortEftOptions.LOADED_CHARGES: True,
+                                PortEftOptions.BOOSTERS: True,
+                                PortEftOptions.CARGO: True})
 
                             HTMLfit = (
                                     '           <li data-role="collapsible" data-iconpos="right" data-shadow="false" '
@@ -223,12 +232,14 @@ class exportHtmlThread(threading.Thread):
 
                             HTMLfit += '              </ul>\n          </li>\n'
                             HTMLship += HTMLfit
+                        except (KeyboardInterrupt, SystemExit):
+                            raise
                         except:
                             pyfalog.warning("Failed to export line")
                             continue
                         finally:
-                            if self.callback:
-                                wx.CallAfter(self.callback, count)
+                            if self.progress:
+                                self.progress.current = count
                             count += 1
                     HTMLgroup += HTMLship + ('          </ul>\n'
                                              '        </li>\n')
@@ -237,12 +248,74 @@ class exportHtmlThread(threading.Thread):
                 # Market group header
                 HTML += (
                     '    <li data-role="collapsible" data-iconpos="right" data-shadow="false" data-corners="false">\n'
-                    '      <h2>' + group.groupName + ' <span class="ui-li-count">' + str(groupFits) + '</span></h2>\n'
+                    '      <h2>' + group.name + ' <span class="ui-li-count">' + str(groupFits) + '</span></h2>\n'
                     '      <ul data-role="listview" data-shadow="false" data-inset="true" data-corners="false">\n' +
                     HTMLgroup +
                     '      </ul>\n'
                     '    </li>'
                 )
+
+        HTML += """
+  </ul>
+ </div>
+  <div data-role="header">
+    <h1>Pyfa fits by Name</h1>
+  </div>
+  <div data-role="content">
+""" 
+        HTML += '  <ul data-role="listview" class="ui-listview-outer" data-inset="true" data-filter="true">\n'
+        categoryList = list(sMkt.getShipRoot())
+        categoryList.sort(key=lambda _ship: _ship.name)
+
+        count = 0
+
+        for group in categoryList:
+            # init market group string to give ships something to attach to
+            HTMLgroup = ''
+
+            ships = list(sMkt.getShipList(group.ID))
+            ships.sort(key=lambda _ship: _ship.name)
+
+            # Keep track of how many ships per group
+            groupFits = 0
+            for ship in ships:
+                fits = sFit.getFitsWithShip(ship.ID)
+
+                if len(fits) > 0:
+                    groupFits += len(fits)
+
+                    for fit in fits:
+                        if self.stopRunning:
+                            return
+                        try:
+                            eftFit = Port.exportEft(getFit(fit[0]), options={
+                                PortEftOptions.IMPLANTS: True,
+                                PortEftOptions.MUTATIONS: True,
+                                PortEftOptions.LOADED_CHARGES: True,
+                                PortEftOptions.BOOSTERS: True,
+                                PortEftOptions.CARGO: True})
+
+                            HTMLfit = (
+                                    '           <li data-role="collapsible" data-iconpos="right" data-shadow="false" '
+                                    'data-corners="false">\n'
+                                    '           <h2>' + ship.name + " - " + fit[1] + '</h2>\n'
+                                    '               <ul data-role="listview" data-shadow="false" data-inset="true" '
+                                                                 'data-corners="false">\n'
+                            )
+
+                            HTMLfit += '                   <li><pre>' + eftFit + '\n                   </pre></li>\n'
+
+                            HTMLfit += '              </ul>\n          </li>\n'
+                            HTML += HTMLfit
+                        except (KeyboardInterrupt, SystemExit):
+                            raise
+                        except:
+                            pyfalog.warning("Failed to export line")
+                            continue
+                        finally:
+                            if self.progress:
+                                self.progress.current = count
+                            count += 1
 
         HTML += """
   </ul>
@@ -278,11 +351,13 @@ class exportHtmlThread(threading.Thread):
                         HTML += '<a class="outOfGameBrowserLink" target="_blank" href="' + dnaUrl + dnaFit + '">' \
                                 + ship.name + ': ' + \
                                 fit[1] + '</a><br> \n'
+                    except (KeyboardInterrupt, SystemExit):
+                        raise
                     except:
                         pyfalog.error("Failed to export line")
                         continue
                     finally:
-                        if self.callback:
-                            wx.CallAfter(self.callback, count)
+                        if self.progress:
+                            self.progress.current = count
                         count += 1
         return HTML

@@ -7,6 +7,7 @@ import wx
 
 from .helpers import AutoListCtrl
 
+_t = wx.GetTranslation
 
 class ItemEffects(wx.Panel):
     def __init__(self, parent, stuff, item):
@@ -21,19 +22,17 @@ class ItemEffects(wx.Panel):
         self.SetSizer(mainSizer)
 
         self.Bind(wx.EVT_LIST_ITEM_ACTIVATED, self.OnClick, self.effectList)
-        if config.debug:
-            self.Bind(wx.EVT_LIST_ITEM_RIGHT_CLICK, self.OnRightClick, self.effectList)
 
         self.PopulateList()
 
     def PopulateList(self):
 
-        self.effectList.InsertColumn(0, "Name")
-        self.effectList.InsertColumn(1, "Active")
-        self.effectList.InsertColumn(2, "Type")
+        self.effectList.InsertColumn(0, _t("Name"))
+        self.effectList.InsertColumn(1, _t("Active"))
+        self.effectList.InsertColumn(2, _t("Type"))
         if config.debug:
-            self.effectList.InsertColumn(3, "Run Time")
-            self.effectList.InsertColumn(4, "ID")
+            self.effectList.InsertColumn(3, _t("Run Time"))
+            self.effectList.InsertColumn(4, _t("ID"))
 
         # self.effectList.SetColumnWidth(0,385)
 
@@ -54,9 +53,9 @@ class ItemEffects(wx.Panel):
 
             if effects[name].isImplemented:
                 if effects[name].activeByDefault:
-                    activeByDefault = "Yes"
+                    activeByDefault = _t("Yes")
                 else:
-                    activeByDefault = "No"
+                    activeByDefault = _t("No")
             else:
                 activeByDefault = ""
 
@@ -99,26 +98,6 @@ class ItemEffects(wx.Panel):
             pass
 
         self.RefreshValues(event)
-
-    def OnRightClick(self, event):
-        """
-        Debug use: open effect file with default application.
-        If effect file does not exist, create it
-        """
-
-        effect = self.effects[event.GetText()]
-
-        file_ = os.path.join(config.pyfaPath, "eos", "effects", "%s.py" % effect.handlerName)
-
-        if not os.path.isfile(file_):
-            open(file_, 'a').close()
-
-        if 'wxMSW' in wx.PlatformInfo:
-            os.startfile(file_)
-        elif 'wxMac' in wx.PlatformInfo:
-            os.system("open " + file_)
-        else:
-            subprocess.call(["xdg-open", file_])
 
     def RefreshValues(self, event):
         self.Freeze()

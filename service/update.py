@@ -17,21 +17,19 @@
 # along with pyfa.  If not, see <http://www.gnu.org/licenses/>.
 # =============================================================================
 
-import threading
-import json
 import calendar
+import threading
 
 # noinspection PyPackageRequirements
-import wx
-# noinspection PyPackageRequirements
 import dateutil.parser
+# noinspection PyPackageRequirements
+import wx
+from logbook import Logger
+from packaging.version import Version
 
 import config
 from service.network import Network
 from service.settings import UpdateSettings
-from logbook import Logger
-from packaging.version import Version
-
 
 pyfalog = Logger(__name__)
 
@@ -43,16 +41,22 @@ class CheckUpdateThread(threading.Thread):
         self.callback = callback
         self.settings = UpdateSettings.getInstance()
         self.network = Network.getInstance()
+        self.running = True
 
     def run(self):
         network = Network.getInstance()
 
         try:
             try:
-                response = network.request('https://www.pyfa.io/update_check?pyfa_version={}&client_hash={}'.format(
-                    config.version, config.getClientSecret()), network.UPDATE)
+                response = network.get(
+                    url='https://www.pyfa.io/update_check?pyfa_version={}&client_hash={}'.format(config.version, config.getClientSecret()),
+                    type=network.UPDATE, timeout=5)
+            except (KeyboardInterrupt, SystemExit):
+                raise
             except Exception as e:
-                response = network.request('https://api.github.com/repos/pyfa-org/Pyfa/releases', network.UPDATE)
+                response = network.get(
+                    url='https://api.github.com/repos/pyfa-org/Pyfa/releases',
+                    type=network.UPDATE, timeout=5)
 
             jsonResponse = response.json()
             jsonResponse.sort(
@@ -80,6 +84,8 @@ class CheckUpdateThread(threading.Thread):
                     wx.CallAfter(self.callback, release, rVersion)
                     break
 
+        except (KeyboardInterrupt, SystemExit):
+            raise
         except Exception as e:
             pyfalog.error("Caught exception in run")
             pyfalog.error(e)
@@ -89,8 +95,11 @@ class CheckUpdateThread(threading.Thread):
     def versiontuple(v):
         return tuple(map(int, (v.split("."))))
 
+    def stop(self):
+        self.running = False
 
-class Update(object):
+
+class Update:
     instance = None
 
     @staticmethod

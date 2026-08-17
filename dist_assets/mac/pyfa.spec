@@ -11,6 +11,10 @@ label = subprocess.check_output([
 with open('.version', 'w+') as f:
     f.write(label.decode())
 
+# Use PYFA_VERSION from the environment (set in CI), falling back to the
+# git-describe label so local builds don't crash on a None plist value.
+pyfa_version = os.getenv('PYFA_VERSION') or label.decode()
+
 block_cipher = None
 
 added_files = [
@@ -20,20 +24,25 @@ added_files = [
              ('../../imgs/renders/*.png', 'imgs/renders'),
              ('../../dist_assets/win/pyfa.ico', '.'),
              ('../../service/jargon/*.yaml', 'service/jargon'),
+             ('../../locale', 'locale'),
              (requests.certs.where(), '.'),  # is this needed anymore?
              ('../../eve.db', '.'),
              ('../../README.md', '.'),
              ('../../LICENSE', '.'),
-             ('../../.version', '.'),
+             ('../../version.yml', '.'),
              ]
 
 
-import_these = []
+import_these = [
+    'numpy.core._dtype_ctypes',  # https://github.com/pyinstaller/pyinstaller/issues/3982
+    'sqlalchemy.ext.baked',  # windows build doesn't launch without if when using sqlalchemy 1.3.x
+    'pkg_resources.py2_warn'  # issue 2156
+]
 
 icon = os.path.join(os.getcwd(), "dist_assets", "mac", "pyfa.icns")
 
 # Walk directories that do dynamic importing
-paths = ('eos/effects', 'eos/db/migrations', 'service/conversions')
+paths = ('eos/db/migrations', 'service/conversions')
 for root, folders, files in chain.from_iterable(os.walk(path) for path in paths):
     for file_ in files:
         if file_.endswith(".py") and not file_.startswith("_"):
@@ -54,26 +63,45 @@ a = Analysis([r'../../pyfa.py'],
              win_no_prefer_redirects=False,
              win_private_assemblies=False,
              cipher=block_cipher)
+
 pyz = PYZ(a.pure, a.zipped_data,
              cipher=block_cipher)
+
 exe = EXE(pyz,
           a.scripts,
-          a.binaries,
-          a.zipfiles,
-          a.datas,
+          exclude_binaries=True,
           name='pyfa',
           debug=False,
           strip=False,
           upx=True,
-          runtime_tmpdir=None,
           console=False ,
           icon=icon,
+          contents_directory='app',
           )
 
-app = BUNDLE(exe,
-             name='pyfa.app',
-             icon=icon,
-             bundle_identifier=None,
-             info_plist={
-                'NSHighResolutionCapable': 'True'
-             })
+coll = COLLECT(
+    exe,
+    a.binaries,
+    a.zipfiles,
+    a.datas,
+    strip=False,
+    upx=True,
+    name='pyfa',
+)
+
+app = BUNDLE(
+    coll,
+    name='pyfa.app',
+    version=pyfa_version,
+    icon=icon,
+    bundle_identifier=None,
+    info_plist={
+        'NSHighResolutionCapable': 'True',
+        'NSPrincipalClass': 'NSApplication',
+        'CFBundleName': 'pyfa',
+        'CFBundleDisplayName': 'pyfa',
+        'CFBundleIdentifier': 'org.pyfaorg.pyfa',
+        'CFBundleVersion': pyfa_version,
+        'CFBundleShortVersionString': pyfa_version,
+    }
+)

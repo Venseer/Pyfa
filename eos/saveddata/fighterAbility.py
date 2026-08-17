@@ -21,12 +21,12 @@ from logbook import Logger
 
 from sqlalchemy.orm import reconstructor
 
+from eos.utils.stats import DmgTypes
+
 pyfalog = Logger(__name__)
 
 
-class FighterAbility(object):
-    DAMAGE_TYPES = ("em", "kinetic", "explosive", "thermal")
-    DAMAGE_TYPES2 = ("EM", "Kin", "Exp", "Therm")
+class FighterAbility:
 
     # We aren't able to get data on the charges that can be stored with fighters. So we hardcode that data here, keyed
     # with the fighter squadron role
@@ -73,7 +73,7 @@ class FighterAbility(object):
 
     @property
     def name(self):
-        return self.__effect.getattr('displayName') or self.__effect.handlerName
+        return self.__effect.getattr('displayName') or self.__effect.name
 
     @property
     def attrPrefix(self):
@@ -95,8 +95,15 @@ class FighterAbility(object):
 
     @property
     def reloadTime(self):
+        return self.getReloadTime()
+
+    def getReloadTime(self, spentShots=None):
+        if spentShots is not None:
+            spentShots = max(self.numShots, spentShots)
+        else:
+            spentShots = self.numShots
         rearm_time = (self.REARM_TIME_MAPPING[self.fighter.getModifiedItemAttr("fighterSquadronRole")] or 0 if self.hasCharges else 0)
-        return self.fighter.getModifiedItemAttr("fighterRefuelingTime") + rearm_time * self.numShots
+        return self.fighter.getModifiedItemAttr("fighterRefuelingTime") + rearm_time * spentShots
 
     @property
     def numShots(self):
@@ -105,44 +112,34 @@ class FighterAbility(object):
     @property
     def cycleTime(self):
         speed = self.fighter.getModifiedItemAttr("{}Duration".format(self.attrPrefix))
-
-        # Factor in reload
-        '''
-        reload = self.reloadTime
-
-        if self.fighter.owner.factorReload:
-            numShots = self.numShots
-            # Speed here already takes into consideration reactivation time
-            speed = (speed * numShots + reload) / numShots if numShots > 0 else speed
-        '''
-
         return speed
 
-    def damageStats(self, targetResists=None):
-        if self.__dps is None:
-            self.__volley = 0
-            self.__dps = 0
-            if self.dealsDamage and self.active:
-                cycleTime = self.cycleTime
+    def getVolley(self, targetProfile=None):
+        if not self.dealsDamage or not self.active:
+            return DmgTypes.default()
+        if self.attrPrefix == "fighterAbilityLaunchBomb":
+            em = self.fighter.getModifiedChargeAttr("emDamage", 0)
+            therm = self.fighter.getModifiedChargeAttr("thermalDamage", 0)
+            kin = self.fighter.getModifiedChargeAttr("kineticDamage", 0)
+            exp = self.fighter.getModifiedChargeAttr("explosiveDamage", 0)
+        else:
+            em = self.fighter.getModifiedItemAttr("{}DamageEM".format(self.attrPrefix), 0)
+            therm = self.fighter.getModifiedItemAttr("{}DamageTherm".format(self.attrPrefix), 0)
+            kin = self.fighter.getModifiedItemAttr("{}DamageKin".format(self.attrPrefix), 0)
+            exp = self.fighter.getModifiedItemAttr("{}DamageExp".format(self.attrPrefix), 0)
+        dmgMult = self.fighter.amount * self.fighter.getModifiedItemAttr("{}DamageMultiplier".format(self.attrPrefix), 1)
+        volley = DmgTypes(em=em * dmgMult, thermal=therm * dmgMult, kinetic=kin * dmgMult, explosive=exp * dmgMult)
+        volley.profile = targetProfile
+        return volley
 
-                if self.attrPrefix == "fighterAbilityLaunchBomb":
-                    # bomb calcs
-                    volley = sum([(self.fighter.getModifiedChargeAttr("%sDamage" % attr) or 0) * (
-                        1 - getattr(targetResists, "%sAmount" % attr, 0)) for attr in self.DAMAGE_TYPES])
-                else:
-                    volley = sum(map(lambda d2, d:
-                                     (self.fighter.getModifiedItemAttr(
-                                             "{}Damage{}".format(self.attrPrefix, d2)) or 0) *
-                                     (1 - getattr(targetResists, "{}Amount".format(d), 0)),
-                                     self.DAMAGE_TYPES2, self.DAMAGE_TYPES))
-
-                volley *= self.fighter.amountActive
-                volley *= self.fighter.getModifiedItemAttr("{}DamageMultiplier".format(self.attrPrefix)) or 1
-                self.__volley += volley
-                self.__dps += volley / (cycleTime / 1000.0)
-
-        return self.__dps, self.__volley
+    def getDps(self, targetProfile=None, cycleTimeOverride=None):
+        volley = self.getVolley(targetProfile=targetProfile)
+        if not volley:
+            return DmgTypes.default()
+        cycleTime = cycleTimeOverride if cycleTimeOverride is not None else self.cycleTime
+        dpsFactor = 1 / (cycleTime / 1000)
+        dps = volley * dpsFactor
+        return dps
 
     def clear(self):
-        self.__dps = None
-        self.__volley = None
+        pass

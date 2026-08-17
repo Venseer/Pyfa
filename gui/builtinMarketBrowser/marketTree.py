@@ -1,14 +1,16 @@
 import wx
 
 from gui.cachingImageList import CachingImageList
-from gui.builtinMarketBrowser.events import RECENTLY_USED_MODULES
+from gui.builtinMarketBrowser.events import RECENTLY_USED_MODULES, CHARGES_FOR_FIT
 
 from logbook import Logger
 
 pyfalog = Logger(__name__)
+_t = wx.GetTranslation
 
 
 class MarketTree(wx.TreeCtrl):
+
     def __init__(self, parent, marketBrowser):
         wx.TreeCtrl.__init__(self, parent, style=wx.TR_DEFAULT_STYLE | wx.TR_HIDE_ROOT)
         pyfalog.debug("Initialize marketTree")
@@ -32,10 +34,14 @@ class MarketTree(wx.TreeCtrl):
 
         # Add recently used modules node
         rumIconId = self.addImage("market_small", "gui")
-        self.AppendItem(self.root, "Recently Used Modules", rumIconId, data=RECENTLY_USED_MODULES)
+        self.AppendItem(self.root, _t("Recently Used Items"), rumIconId, data=RECENTLY_USED_MODULES)
+        # Add charges for active fitting node
+        cffIconId = self.addImage("damagePattern_small", "gui")
+        self.AppendItem(self.root, _t("Charges For Active Fit"), cffIconId, data=CHARGES_FOR_FIT)
 
         # Bind our lookup method to when the tree gets expanded
         self.Bind(wx.EVT_TREE_ITEM_EXPANDING, self.expandLookup)
+        self.Bind(wx.EVT_TREE_ITEM_COLLAPSED, self.OnCollapsed)
 
     def addImage(self, iconFile, location="icons"):
         if iconFile is None:
@@ -58,9 +64,12 @@ class MarketTree(wx.TreeCtrl):
                 # If market should have items but it doesn't, do not show it
                 if sMkt.marketGroupValidityCheck(childMktGrp) is False:
                     continue
-                iconId = self.addImage(sMkt.getIconByMarketGroup(childMktGrp))
+                icon = sMkt.getIconByMarketGroup(childMktGrp)
+                iconId = -1 if icon is None else self.addImage(icon)
                 try:
                     childId = self.AppendItem(root, childMktGrp.name, iconId, data=childMktGrp.ID)
+                except (KeyboardInterrupt, SystemExit):
+                    raise
                 except Exception as e:
                     pyfalog.debug("Error appending item.")
                     pyfalog.debug(e)
@@ -70,9 +79,12 @@ class MarketTree(wx.TreeCtrl):
 
             self.SortChildren(root)
 
+    def OnCollapsed(self, event):
+        self.CollapseAllChildren(event.Item)
+        event.Skip()
+
     def jump(self, item):
         """Open market group and meta tab of given item"""
-        self.marketBrowser.searchMode = False
         sMkt = self.sMkt
         mg = sMkt.getMarketGroupByItem(item)
 
@@ -96,4 +108,3 @@ class MarketTree(wx.TreeCtrl):
             self.Expand(item)
 
         self.SelectItem(item)
-        self.marketBrowser.itemView.selectionMade()

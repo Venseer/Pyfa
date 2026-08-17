@@ -1,7 +1,8 @@
 __all__ = [
     "character",
     "fit",
-    "mutator",
+    "mutatorMod",
+    "mutatorDrone",
     "module",
     "user",
     "skill",
@@ -11,8 +12,7 @@ __all__ = [
     "implant",
     "damagePattern",
     "miscData",
-    "targetResists",
+    "targetProfile",
     "override",
-    "implantSet",
-    "loadDefaultDatabaseValues"
+    "implantSet"
 ]

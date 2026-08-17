@@ -1,6 +1,7 @@
 # noinspection PyPackageRequirements
 import wx
 
+from eos.const import Operator
 from eos.saveddata.mode import Mode
 from eos.saveddata.character import Skill
 from eos.saveddata.implant import Implant
@@ -16,12 +17,31 @@ import gui.mainFrame
 from gui.contextMenu import ContextMenu
 from gui.bitmap_loader import BitmapLoader
 
+_t = wx.GetTranslation
+
+
+def formatOperator(operator, stackingGroup, preResAmount, postResAmount):
+    opMap = {
+        Operator.PREASSIGN: '=',
+        Operator.PREINCREASE: '+',
+        Operator.MULTIPLY: '*',
+        Operator.POSTINCREASE: '+',
+        Operator.FORCE: '\u2263'
+    }
+    prefix = ''
+    if stackingGroup is not None:
+        prefix += 's'
+    if preResAmount != postResAmount:
+        prefix += 'r'
+    return '{}{}'.format(prefix, opMap[operator])
+
 
 class ItemAffectedBy(wx.Panel):
     ORDER = [Fit, Ship, Citadel, Mode, Module, Drone, Fighter, Implant, Booster, Skill]
 
     def __init__(self, parent, stuff, item):
         wx.Panel.__init__(self, parent)
+        self.SetBackgroundColour(wx.SystemSettings.GetColour(wx.SYS_COLOUR_BTNFACE))
         self.stuff = stuff
         self.item = item
 
@@ -36,6 +56,7 @@ class ItemAffectedBy(wx.Panel):
         mainSizer = wx.BoxSizer(wx.VERTICAL)
 
         self.affectedBy = wx.TreeCtrl(self, style=wx.TR_DEFAULT_STYLE | wx.TR_HIDE_ROOT | wx.NO_BORDER)
+        self.affectedBy.SetBackgroundColour(wx.SystemSettings.GetColour(wx.SYS_COLOUR_WINDOW))
         mainSizer.Add(self.affectedBy, 1, wx.ALL | wx.EXPAND, 0)
 
         self.m_staticline = wx.StaticLine(self, wx.ID_ANY, wx.DefaultPosition, wx.DefaultSize, wx.LI_HORIZONTAL)
@@ -43,17 +64,17 @@ class ItemAffectedBy(wx.Panel):
         mainSizer.Add(self.m_staticline, 0, wx.EXPAND)
         bSizer = wx.BoxSizer(wx.HORIZONTAL)
 
-        self.toggleExpandBtn = wx.ToggleButton(self, wx.ID_ANY, "Expand All", wx.DefaultPosition, wx.DefaultSize, 0)
+        self.toggleExpandBtn = wx.ToggleButton(self, wx.ID_ANY, _t("Expand All"), wx.DefaultPosition, wx.DefaultSize, 0)
         bSizer.Add(self.toggleExpandBtn, 0, wx.ALIGN_CENTER_VERTICAL)
 
-        self.toggleNameBtn = wx.ToggleButton(self, wx.ID_ANY, "Toggle Names", wx.DefaultPosition, wx.DefaultSize, 0)
+        self.toggleNameBtn = wx.ToggleButton(self, wx.ID_ANY, _t("Toggle Names"), wx.DefaultPosition, wx.DefaultSize, 0)
         bSizer.Add(self.toggleNameBtn, 0, wx.ALIGN_CENTER_VERTICAL)
 
-        self.toggleViewBtn = wx.ToggleButton(self, wx.ID_ANY, "Toggle View", wx.DefaultPosition, wx.DefaultSize, 0)
+        self.toggleViewBtn = wx.ToggleButton(self, wx.ID_ANY, _t("Toggle View"), wx.DefaultPosition, wx.DefaultSize, 0)
         bSizer.Add(self.toggleViewBtn, 0, wx.ALIGN_CENTER_VERTICAL)
 
         if stuff is not None:
-            self.refreshBtn = wx.Button(self, wx.ID_ANY, "Refresh", wx.DefaultPosition, wx.DefaultSize, wx.BU_EXACTFIT)
+            self.refreshBtn = wx.Button(self, wx.ID_ANY, _t("Refresh"), wx.DefaultPosition, wx.DefaultSize, wx.BU_EXACTFIT)
             bSizer.Add(self.refreshBtn, 0, wx.ALIGN_CENTER_VERTICAL)
             self.refreshBtn.Bind(wx.EVT_BUTTON, self.RefreshTree)
 
@@ -65,13 +86,10 @@ class ItemAffectedBy(wx.Panel):
         self.SetSizer(mainSizer)
         self.PopulateTree()
         self.Layout()
-        self.affectedBy.Bind(wx.EVT_TREE_ITEM_RIGHT_CLICK, self.scheduleMenu)
+        self.affectedBy.Bind(wx.EVT_CONTEXT_MENU, self.spawnMenu)
 
-    def scheduleMenu(self, event):
-        event.Skip()
-        wx.CallAfter(self.spawnMenu, event.Item)
-
-    def spawnMenu(self, item):
+    def spawnMenu(self, event):
+        item, _ = self.affectedBy.HitTest(self.ScreenToClient(event.Position))
         self.affectedBy.SelectItem(item)
 
         stuff = self.affectedBy.GetItemData(item)
@@ -85,7 +103,8 @@ class ItemAffectedBy(wx.Panel):
         # instead, we send the item.
         type_ = stuff.__class__.__name__
         contexts.append(("itemStats", type_))
-        menu = ContextMenu.getMenu(stuff if type_ != "Skill" else stuff.item, *contexts)
+        stuff = stuff if type_ != "Skill" else stuff.item
+        menu = ContextMenu.getMenu(self, stuff, (stuff,), *contexts)
         self.PopupMenu(menu)
 
     def ExpandCollapseTree(self):
@@ -96,6 +115,8 @@ class ItemAffectedBy(wx.Panel):
         else:
             try:
                 self.affectedBy.CollapseAll()
+            except (KeyboardInterrupt, SystemExit):
+                raise
             except:
                 pass
 
@@ -155,7 +176,7 @@ class ItemAffectedBy(wx.Panel):
 
     def sortAttrDisplayName(self, attr):
         info = self.stuff.item.attributes.get(attr)
-        if info and info.displayName != "":
+        if info and info.displayName:
             return info.displayName
 
         return attr
@@ -177,7 +198,6 @@ class ItemAffectedBy(wx.Panel):
               ]
         }
         """
-
         attributes = self.stuff.itemModifiedAttributes if self.item == self.stuff.item else self.stuff.chargeModifiedAttributes
         container = {}
         for attrName in attributes.iterAfflictions():
@@ -186,7 +206,7 @@ class ItemAffectedBy(wx.Panel):
                 continue
 
             for fit, afflictors in attributes.getAfflictions(attrName).items():
-                for afflictor, modifier, amount, used in afflictors:
+                for afflictor, operator, stackingGroup, preResAmount, postResAmount, used in afflictors:
 
                     if not used or afflictor.item is None:
                         continue
@@ -212,8 +232,10 @@ class ItemAffectedBy(wx.Panel):
                     else:
                         item = afflictor.item
 
-                    items[attrName].append(
-                            (type(afflictor), afflictor, item, modifier, amount, getattr(afflictor, "projected", False)))
+                    items[attrName].append((
+                        type(afflictor), afflictor, item,
+                        formatOperator(operator, stackingGroup, preResAmount, postResAmount),
+                        postResAmount, getattr(afflictor, "projected", False)))
 
         # Make sure projected fits are on top
         rootOrder = list(container.keys())
@@ -234,7 +256,7 @@ class ItemAffectedBy(wx.Panel):
 
             for attrName in attrOrder:
                 attrInfo = self.stuff.item.attributes.get(attrName)
-                displayName = attrInfo.displayName if attrInfo and attrInfo.displayName != "" else attrName
+                displayName = attrInfo.displayName if attrInfo and attrInfo.displayName else attrName
 
                 if attrInfo:
                     if attrInfo.iconID is not None:
@@ -284,7 +306,11 @@ class ItemAffectedBy(wx.Panel):
                             penalized += "(penalized)"
                         if 'r' in attrModifier:
                             penalized += "(resisted)"
-                    attrModifier = "*"
+                        attrModifier = "*"
+
+                    if attrModifier == "+" and attrAmount < 0:
+                        attrModifier = "-"
+                        attrAmount = -attrAmount
 
                     # this is the Module node, the attribute will be attached to this
                     display = "%s %s %.2f %s" % (displayStr, attrModifier, attrAmount, penalized)
@@ -315,7 +341,7 @@ class ItemAffectedBy(wx.Panel):
                 continue
 
             for fit, afflictors in attributes.getAfflictions(attrName).items():
-                for afflictor, modifier, amount, used in afflictors:
+                for afflictor, operator, stackingGroup, preResAmount, postResAmount, used in afflictors:
                     if not used or getattr(afflictor, 'item', None) is None:
                         continue
 
@@ -342,12 +368,13 @@ class ItemAffectedBy(wx.Panel):
 
                     info = items[item.name]
                     info[1].add(afflictor)
+                    operatorStr = formatOperator(operator, stackingGroup, preResAmount, postResAmount)
                     # If info[1] > 1, there are two separate modules working.
                     # Check to make sure we only include the modifier once
                     # See GH issue 154
-                    if len(info[1]) > 1 and (attrName, modifier, amount) in info[2]:
+                    if len(info[1]) > 1 and (attrName, operatorStr, postResAmount) in info[2]:
                         continue
-                    info[2].append((attrName, modifier, amount))
+                    info[2].append((attrName, operatorStr, postResAmount))
 
         # Make sure projected fits are on top
         rootOrder = list(container.keys())
@@ -416,9 +443,13 @@ class ItemAffectedBy(wx.Panel):
                                 penalized += "(penalized)"
                             if 'r' in attrModifier:
                                 penalized += "(resisted)"
-                        attrModifier = "*"
+                            attrModifier = "*"
 
-                        attributes.append((attrName, (displayName if displayName != "" else attrName), attrModifier,
+                        if attrModifier == "+" and attrAmount < 0:
+                            attrModifier = "-"
+                            attrAmount = -attrAmount
+
+                        attributes.append((attrName, (displayName if displayName else attrName), attrModifier,
                                            attrAmount, penalized, attrIcon))
 
                     attrSorted = sorted(attributes, key=lambda attribName: attribName[0])
@@ -428,14 +459,14 @@ class ItemAffectedBy(wx.Panel):
                         if self.showRealNames:
                             display = "%s %s %.2f %s" % (attrName, attrModifier, attrAmount, penalized)
                             saved = "%s %s %.2f %s" % (
-                                displayName if displayName != "" else attrName,
+                                displayName if displayName else attrName,
                                 attrModifier,
                                 attrAmount,
                                 penalized
                             )
                         else:
                             display = "%s %s %.2f %s" % (
-                                displayName if displayName != "" else attrName,
+                                displayName if displayName else attrName,
                                 attrModifier,
                                 attrAmount,
                                 penalized

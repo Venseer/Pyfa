@@ -21,7 +21,7 @@ from logbook import Logger
 
 import eos.db
 from eos.effectHandlerHelpers import HandledItem
-from eos.modifiedAttributeDict import ModifiedAttributeDict, ItemAttrShortcut, cappingAttrKeyCache
+from eos.modifiedAttributeDict import ModifiedAttributeDict, ItemAttrShortcut, maxLimitAttrKeyCache
 from eos.saveddata.mode import Mode
 
 pyfalog = Logger(__name__)
@@ -29,21 +29,22 @@ pyfalog = Logger(__name__)
 
 class Ship(ItemAttrShortcut, HandledItem):
     EXTRA_ATTRIBUTES = {
-        "armorRepair"               : 0,
-        "hullRepair"                : 0,
-        "shieldRepair"              : 0,
-        "maxActiveDrones"           : 0,
+        "armorRepair": 0,
+        "armorRepairPreSpool": 0,
+        "armorRepairFullSpool": 0,
+        "hullRepair": 0,
+        "shieldRepair": 0,
+        "maxActiveDrones": 0,
         "maxTargetsLockedFromSkills": 2,
-        "droneControlRange"         : 20000,
-        "cloaked"                   : False,
-        "siege"                     : False
+        "droneControlRange": 20000,
+        "cloaked": False,
         # We also have speedLimit for Entosis Link, but there seems to be an
         # issue with naming it exactly "speedLimit" due to unknown reasons.
         # Regardless, we don't have to put it here anyways - it will come up
         # as None unless the Entosis effect sets it.
     }
 
-    def __init__(self, item, parent=None):
+    def __init__(self, item, owner=None):
         self.validate(item)
 
         self.__item = item
@@ -54,11 +55,9 @@ class Ship(ItemAttrShortcut, HandledItem):
         self.__itemModifiedAttributes.overrides = self.item.overrides
 
         if "maximumRangeCap" in self.__itemModifiedAttributes.original:
-            cappingAttrKeyCache["maxTargetRange"] = "maximumRangeCap"
+            maxLimitAttrKeyCache["maxTargetRange"] = "maximumRangeCap"
 
-        # there are occasions when we need to get to the parent fit of the ship, such as when we need the character
-        # skills for ship-role gang boosts (Titans)
-        self.parent = parent
+        self.owner = owner
         self.commandBonus = 0
 
     def validate(self, item):
@@ -99,9 +98,9 @@ class Ship(ItemAttrShortcut, HandledItem):
                 # skillbook modifiers will use the stale modifier value
                 # GH issue #351
                 fit.register(self)
-                effect.handler(fit, self, ("ship",))
+                effect.handler(fit, self, ("ship",), None, effect=effect)
 
-    def validateModeItem(self, item):
+    def validateModeItem(self, item, owner=None):
         """ Checks if provided item is a valid mode """
         items = self.__modeItems
 
@@ -109,7 +108,7 @@ class Ship(ItemAttrShortcut, HandledItem):
             # if we have items, then we are in a tactical destroyer and must have a mode
             if item is None or item not in items:
                 # If provided item is invalid mode, force new one
-                return Mode(items[0])
+                return Mode(items[0], owner=owner)
             return Mode(item)
         return None
 
@@ -127,11 +126,11 @@ class Ship(ItemAttrShortcut, HandledItem):
         valid Item objects, not the Mode objects. Returns None if not a
         t3 dessy
         """
-        if self.item.group.name != "Tactical Destroyer":
+        if self.item.group.name != "Tactical Destroyer" and self.item.name != "Anhinga":
             return None
 
         items = []
-        g = eos.db.getGroup("Ship Modifiers", eager=("items.attributes"))
+        g = eos.db.getGroup("Ship Modifiers", eager="items.attributes")
         for item in g.items:
             # Rely on name detection because race is not reliable
             if item.name.lower().startswith(self.item.name.lower()):

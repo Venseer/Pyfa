@@ -1,57 +1,58 @@
 # pyfa
 
-[![Join us on Slack!](https://pyfainvite.azurewebsites.net/badge.svg)](https://pyfainvite.azurewebsites.net/) [![Build Status](https://travis-ci.org/pyfa-org/Pyfa.svg?branch=master)](https://travis-ci.org/pyfa-org/Pyfa)
+[![Build Status](https://ci.appveyor.com/api/projects/status/github/pyfa-org/pyfa?branch=master&svg=true)]([https://travis-ci.org/pyfa-org/Pyfa](https://ci.appveyor.com/project/pyfa-org/pyfa))
 
-![pyfa](https://cloud.githubusercontent.com/assets/3904767/10271512/af385ef2-6ade-11e5-8f67-52b8b1e4c797.PNG)
+![pyfa](https://user-images.githubusercontent.com/275209/66119992-864be080-e5e2-11e9-994a-3a4368c9fad7.png)
 
 ## What is it?
 
-pyfa, short for **py**thon **f**itting **a**ssistant, allows you to create, experiment with, and save ship fittings without being in game. Open source and written in Python, it is available on any platform where Python 2.x and wxWidgets are available, including Windows, Mac OS X, and Linux.
+Pyfa, short for **py**thon **f**itting **a**ssistant, allows you to create, experiment with, and save ship fittings without being in game. Open source and written in Python, it is available on any platform where Python 3 and wxWidgets are available, including Windows, macOS, and Linux.
 
 ## Latest Version and Changelogs
-The latest version along with release notes can always be found on the project's [Releases](https://github.com/DarkFenX/Pyfa/releases) page. pyfa will notify you if you are running an outdated version.
+The latest version along with release notes can always be found on the project's [releases](https://github.com/pyfa-org/Pyfa/releases) page. Pyfa will notify you if you are running an outdated version.
 
 ## Installation
-Windows and OS X users are supplied self-contained builds of pyfa on the [latest releases](https://github.com/pyfa-org/Pyfa/releases/latest) page. An `.exe` installer is also available for Windows builds. Linux users can run pyfa using their distribution's Python interpreter. There is no official self-contained package for Linux, however, there are a number of third-party packages available through distribution-specific repositories.
+Windows, macOS, and Linux users are supplied self-contained builds of pyfa on the [latest releases](https://github.com/pyfa-org/Pyfa/releases/latest) page.
 
-#### OS X
+### Third Party Packages
+Please note that these packages are maintained by third-parties and are not evaluated by the pyfa developers.
 
-Apart from the official release, there is also a [Homebrew](http://brew.sh) option for installing pyfa on OS X. Please note this is maintained by a third-party and is not tested by pyfa developers. Simply fire up in terminal:
+#### macOS
+Apart from the official release, there is also a [Homebrew](https://formulae.brew.sh/cask/pyfa) option for installing pyfa on macOS. Simply fire up in terminal:
 ```
-$ brew install Caskroom/cask/pyfa
+$ brew install --cask pyfa
 ```
 
-### Linux Distro-specific Packages
-The following is a list of pyfa packages available for certain distributions. Please note that these packages are maintained by third-parties and are not evaluated by the pyfa developers.
+#### Linux Distro-specific Packages
+The following is a list of pyfa packages available for certain distributions. 
 
-* Debian/Ubuntu/derivitives: https://github.com/AdamMajer/Pyfa/releases
 * Arch: https://aur.archlinux.org/packages/pyfa/
-* openSUSE: https://build.opensuse.org/package/show/home:rmk2/pyfa
-* FreeBSD: http://www.freshports.org/games/pyfa/ (see [#484](https://github.com/pyfa-org/Pyfa/issues/484) for instructions)
+* Gentoo: https://github.com/ZeroPointEnergy/gentoo-pyfa-overlay
 
-### Dependencies
-If you wish to help with development or simply need to run pyfa through a Python interpreter, the following software is required:
-
-* Python 3.6
-* Requirements as listed in `requirements.txt`
+## Contribution
+If you wish to help with development or you need to run pyfa through a Python interpreter, check out [the instructions](https://github.com/pyfa-org/Pyfa/blob/master/CONTRIBUTING.md).
 
 ## Bug Reporting
-The preferred method of reporting bugs is through the project's [GitHub Issues interface](https://github.com/pyfa-org/Pyfa/issues). Alternatively, posting a report in the [pyfa thread](http://forums.eveonline.com/default.aspx?g=posts&t=247609) on the official EVE Online forums is acceptable. Guidelines for bug reporting can be found on [this wiki page](https://github.com/DarkFenX/Pyfa/wiki/Bug-Reporting). 
+The preferred method of reporting bugs is through the project's [GitHub Issues interface](https://github.com/pyfa-org/Pyfa/issues). Alternatively, posting a report in the [pyfa thread](https://forums.eveonline.com/t/27156) on the official EVE Online forums is acceptable. Guidelines for bug reporting can be found on [this wiki page](https://github.com/pyfa-org/Pyfa/wiki/Bug-Reporting). 
 
 ## License
-pyfa is licensed under the GNU GPL v3.0, see LICENSE
+Pyfa is licensed under the GNU GPL v3.0, see LICENSE
 
 ## Resources
-* Development repository: [https://github.com/pyfa-org/Pyfa](https://github.com/pyfa-org/Pyfa)
+* [Development repository](https://github.com/pyfa-org/Pyfa)
 * [EVE forum thread](https://forums.eveonline.com/t/27156)
-* [EVE University guide using pyfa](http://wiki.eveuniversity.org/Guide_to_using_PYFA)
+* [EVE University guide using pyfa](https://wiki.eveuniversity.org/PYFA)
 * [EVE Online website](http://www.eveonline.com/)
 
 ## Contacts:
+* Kadesh / DarkPhoenix
+    * GitHub: @DarkFenX
+    * EVE: Kadesh Priestess
+    * Email: phoenix@mail.ru
 * Sable Blitzmann
     * GitHub: @blitzmann
     * [TweetFleet Slack](https://www.fuzzwork.co.uk/tweetfleet-slack-invites/): @blitzmann
-    * [Gitter chat](https://gitter.im/pyfa-org/Pyfa): @ blitzmann
+    * [Gitter chat](https://gitter.im/pyfa-org/Pyfa): @blitzmann
     * Email: sable.blitzmann@gmail.com
 
 ## CCP Copyright Notice

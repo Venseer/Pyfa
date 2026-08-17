@@ -21,10 +21,13 @@ from logbook import Logger
 
 from sqlalchemy.orm import reconstructor
 
+from eos.utils.round import roundToPrec
+
+
 pyfalog = Logger(__name__)
 
 
-class BoosterSideEffect(object):
+class BoosterSideEffect:
 
     def __init__(self, effect):
         """Initialize from the program"""
@@ -56,9 +59,8 @@ class BoosterSideEffect(object):
     @property
     def name(self):
         return "{0}% {1}".format(
-            self.booster.getModifiedItemAttr(self.attr),
-            self.__effect.getattr('displayName') or self.__effect.handlerName,
-        )
+            roundToPrec(self.booster.getModifiedItemAttr(self.attr), 5),
+            self.__effect.getattr('displayName') or self.__effect.name)
 
     @property
     def attr(self):

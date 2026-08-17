@@ -29,7 +29,7 @@ class ImportError(Exception):
     pass
 
 
-class ImplantSets(object):
+class ImplantSets:
     instance = None
 
     @classmethod
@@ -52,10 +52,12 @@ class ImplantSets(object):
         return eos.db.getImplantSet(setID).implants
 
     @staticmethod
-    def addImplant(setID, itemID):
+    def addImplants(setID, *itemIDs):
         implant_set = eos.db.getImplantSet(setID)
-        implant = es_Implant(eos.db.getItem(itemID))
-        implant_set.implants.append(implant)
+        for itemID in itemIDs:
+            implant = es_Implant(eos.db.getItem(itemID))
+            implant_set.implants.makeRoom(implant)
+            implant_set.implants.append(implant)
         eos.db.commit()
 
     @staticmethod
@@ -108,6 +110,8 @@ class ImplantSets(object):
                 else:
                     item = sMkt.getItem(line)
                     current.implants.append(es_Implant(item))
+            except (KeyboardInterrupt, SystemExit):
+                raise
             except:
                 errors += 1
                 continue

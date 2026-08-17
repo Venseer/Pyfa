@@ -21,13 +21,14 @@
 import wx
 
 
-class ViewColumn(object):
+class ViewColumn:
     """
     Abstract class that columns can inherit from.
     Once the missing methods are correctly implemented,
     they can be used as columns in a view.
     """
     columns = {}
+    proportionWidth = 1
 
     def __init__(self, fittingView):
         self.fittingView = fittingView
@@ -72,13 +73,22 @@ from gui.builtinViewColumns import (  # noqa: E402, F401
     ammo,
     ammoIcon,
     attributeDisplay,
+    attributeDisplayGraph,
     baseIcon,
     baseName,
     capacitorUse,
+    dampScanRes,
+    droneEhp,
+    droneRegen,
+    graphColor,
+    graphLightness,
+    graphLineStyle,
+    heat,
     maxRange,
     misc,
     price,
+    projectionRange,
     propertyDisplay,
     state,
-    sideEffects
-)
+    sideEffects,
+    targetResists)

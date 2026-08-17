@@ -30,6 +30,7 @@ pyfalog = Logger(__name__)
 
 
 class Booster(HandledItem, ItemAttrShortcut):
+
     def __init__(self, item):
         self.__item = item
 
@@ -121,7 +122,7 @@ class Booster(HandledItem, ItemAttrShortcut):
                     (effect.isType("passive") or effect.isType("boosterSideEffect")):
                 if effect.isType("boosterSideEffect") and effect not in self.activeSideEffectEffects:
                     continue
-                effect.handler(fit, self, ("booster",))
+                effect.handler(fit, self, ("booster",), None, effect=effect)
 
     @validates("ID", "itemID", "ammoID", "active")
     def validator(self, key, val):
@@ -147,3 +148,17 @@ class Booster(HandledItem, ItemAttrShortcut):
             copyEffect.active = sideEffect.active
 
         return copy
+
+    def rebase(self, item):
+        active = self.active
+        sideEffectStates = {se.effectID: se.active for se in self.sideEffects}
+        Booster.__init__(self, item)
+        self.active = active
+        for sideEffect in self.sideEffects:
+            if sideEffect.effectID in sideEffectStates:
+                sideEffect.active = sideEffectStates[sideEffect.effectID]
+
+    def __repr__(self):
+        if self.item is not None:
+            return f"Booster(ID={self.item.ID}, name={self.item.name}) at {hex(id(self))}"
+        return f"Booster(ID={self.itemID}) at {hex(id(self))}"

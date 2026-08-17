@@ -1,13 +1,15 @@
-wxPython == 4.0.0b2
-logbook >= 1.0.0
-matplotlib >= 2.0.0
-python-dateutil
-requests >= 2.0.0
-sqlalchemy >= 1.0.5
-cryptography
-diskcache
-markdown2
-packaging
-roman
-beautifulsoup4
-PyYAML
+wxPython==4.2.1
+logbook==1.7.0.post0
+numpy==1.26.2
+matplotlib==3.8.2
+python-dateutil==2.8.2
+requests==2.31.0
+sqlalchemy==1.4.50
+cryptography==42.0.4
+markdown2==2.4.11
+packaging==23.2
+roman==4.1
+beautifulsoup4==4.12.2
+pyyaml==6.0.1
+python-jose==3.3.0
+requests-cache==1.1.1

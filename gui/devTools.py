@@ -17,25 +17,30 @@
 # along with pyfa.    If not, see <http://www.gnu.org/licenses/>.
 # =============================================================================
 
+import gc
+import threading
+import time
+
 # noinspection PyPackageRequirements
 import wx
 from logbook import Logger
-import gc
-import eos
-import time
-import threading
-from gui.builtinShipBrowser.events import FitSelected
 
+import eos.db
+from gui.auxWindow import AuxiliaryFrame
+from gui.builtinShipBrowser.events import FitSelected
 
 pyfalog = Logger(__name__)
 
 
-class DevTools(wx.Dialog):
+class DevTools(AuxiliaryFrame):
+
     DAMAGE_TYPES = ("em", "thermal", "kinetic", "explosive")
 
     def __init__(self, parent):
-        wx.Dialog.__init__(self, parent, id=wx.ID_ANY, title="Damage Pattern Editor", size=wx.Size(400, 240))
-
+        super().__init__(
+            parent, id=wx.ID_ANY, title="Development Tools", resizeable=True,
+            size=wx.Size(400, 320) if "wxGTK" in wx.PlatformInfo else wx.Size(400, 240))
+        self.mainFrame = parent
         self.block = False
         self.SetSizeHints(wx.DefaultSize, wx.DefaultSize)
 
@@ -56,13 +61,18 @@ class DevTools(wx.Dialog):
         self.fitTest = wx.Button(self, wx.ID_ANY, "Test fits", wx.DefaultPosition, wx.DefaultSize, 0)
         mainSizer.Add(self.fitTest, 0, wx.EXPAND | wx.TOP | wx.BOTTOM, 5)
 
-        self.fitTest .Bind(wx.EVT_BUTTON, self.fit_test)
+        self.fitTest.Bind(wx.EVT_BUTTON, self.fit_test)
+
+        self.cmdPrint = wx.Button(self, wx.ID_ANY, "Command Print", wx.DefaultPosition, wx.DefaultSize, 0)
+        mainSizer.Add(self.cmdPrint, 0, wx.EXPAND | wx.TOP | wx.BOTTOM, 5)
+
+        self.cmdPrint.Bind(wx.EVT_BUTTON, self.cmd_print)
 
         self.SetSizer(mainSizer)
 
         self.Layout()
         self.CenterOnParent()
-        self.Show()
+        self.SetMinSize(self.GetSize())
 
     def objects_by_id(self, evt):
         input = self.id_get.GetValue()
@@ -80,6 +90,11 @@ class DevTools(wx.Dialog):
                 break
         else:
             print(None)
+
+    def cmd_print(self, evt):
+        print("=" * 20)
+        for x in self.mainFrame.command.GetCommands():
+            print("{}{} {}".format("==> " if x == self.mainFrame.command.GetCurrentCommand() else "", x.GetName(), x))
 
     def gc_collect(self, evt):
         print(gc.collect())

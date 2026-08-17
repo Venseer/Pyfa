@@ -19,17 +19,16 @@
 #===============================================================================
 
 
-'''
+"""
 This script is used to compare two different database versions.
 It shows removed/changed/new items with list of changed effects,
 changed attributes and effects which were renamed
-'''
+"""
 
 import argparse
 import os.path
 import re
 import sqlite3
-import sys
 
 script_dir = os.path.dirname(__file__)
 default_old = os.path.join(script_dir, "..", "eve.db")
@@ -42,39 +41,36 @@ def main(old, new, groups=True, effects=True, attributes=True, renames=True):
     new_cursor = new_db.cursor()
 
     # Force some of the items to make them published
-    FORCEPUB_TYPES = ("Ibis", "Impairor", "Velator", "Reaper",
-    "Amarr Tactical Destroyer Propulsion Mode",
-    "Amarr Tactical Destroyer Sharpshooter Mode",
-    "Amarr Tactical Destroyer Defense Mode")
-    OVERRIDES_TYPEPUB = 'UPDATE invtypes SET published = 1 WHERE typeName = ?'
+    FORCEPUB_TYPES = (
+        "% Propulsion Mode",
+        "% Sharpshooter Mode",
+        "% Defense Mode",
+        "% Primary Mode",
+        "% Secondary Mode",
+        "% Tertiary Mode",
+    )
+    OVERRIDES_TYPEPUB = 'UPDATE invtypes SET published = 1 WHERE typeName like ?'
     for typename in FORCEPUB_TYPES:
         old_cursor.execute(OVERRIDES_TYPEPUB, (typename,))
         new_cursor.execute(OVERRIDES_TYPEPUB, (typename,))
 
     # Initialization of few things used by both changed/renamed effects list
     script_dir = os.path.dirname(__file__)
-    effectspath = os.path.join(script_dir, "..", "eos", "effects")
+    effectspath = os.path.join(script_dir, "..", "eos", "effects.py")
     implemented = set()
 
-    for filename in os.listdir(effectspath):
-        if filename.startswith("_") or not filename.endswith(".py"):
-            continue
-
-        basename, _ = filename.rsplit('.', 1)
-        # Ignore non-py files and exclude implementation-specific 'effect'
-        implemented.add(basename)
+    with open(effectspath) as f:
+        for line in f:
+            for m in re.finditer(r'class Effect(?P<eid>\d+)\(BaseEffect\):', line):
+                effectid = int(m.group('eid'))
+                implemented.add(effectid)
 
     # Effects' names are used w/o any special symbols by eos
     stripspec = "[^A-Za-z0-9]"
 
     # Method to get data if effect is implemented in eos or not
-    def geteffst(effectname):
-        eosname = re.sub(stripspec, "", effectname).lower()
-        if eosname in implemented:
-            impstate = True
-        else:
-            impstate = False
-        return impstate
+    def geteffst(effectid):
+        return effectid in implemented
 
     def findrenames(ren_dict, query, strip=False):
 
@@ -97,15 +93,12 @@ def main(old, new, groups=True, effects=True, attributes=True, renames=True):
                 ren_dict[id] = (oldname, newname)
         return
 
-    def printrenames(ren_dict, title, implementedtag=False):
+    def printrenames(ren_dict, title):
         if len(ren_dict) > 0:
             print('\nRenamed ' + title + ':')
             for id in sorted(ren_dict):
                 couple = ren_dict[id]
-                if implementedtag:
-                    print(("\n[{0}] \"{1}\"\n[{2}] \"{3}\"".format(geteffst(couple[0]), couple[0], geteffst(couple[1]), couple[1])))
-                else:
-                    print(("    \"{0}\": \"{1}\",".format(couple[0].encode('utf-8'), couple[1].encode('utf-8'))))
+                print(("    \"{0}\": \"{1}\",".format(couple[0], couple[1])))
 
     groupcats = {}
     def getgroupcat(grp):
@@ -145,7 +138,7 @@ def main(old, new, groups=True, effects=True, attributes=True, renames=True):
         if grp in groupnames:
             name = groupnames[grp]
         else:
-            query = 'SELECT groupName FROM invgroups WHERE groupID = ?'
+            query = 'SELECT name FROM invgroups WHERE groupID = ?'
             new_cursor.execute(query, (grp,))
             name = ""
             for row in new_cursor:
@@ -208,7 +201,7 @@ def main(old, new, groups=True, effects=True, attributes=True, renames=True):
 
         for cursor, dictionary in ((old_cursor, old_itmdata), (new_cursor, new_itmdata)):
             # Compose list of items we're interested in, filtered by category
-            query = 'SELECT it.typeID, it.groupID FROM invtypes AS it INNER JOIN invgroups AS ig ON it.groupID = ig.groupID INNER JOIN invcategories AS ic ON ig.categoryID = ic.categoryID WHERE it.published = 1 AND ic.categoryName IN ("Ship", "Module", "Charge", "Skill", "Drone", "Implant", "Subsystem", "Structure", "Structure Module", "Fighter")'
+            query = 'SELECT it.typeID, it.groupID FROM invtypes AS it INNER JOIN invgroups AS ig ON it.groupID = ig.groupID INNER JOIN invcategories AS ic ON ig.categoryID = ic.categoryID WHERE it.published = 1 AND ic.name IN ("Ship", "Module", "Charge", "Skill", "Drone", "Implant", "Subsystem", "Structure", "Structure Module", "Fighter")'
             cursor.execute(query)
             for row in cursor:
                 itemid = row[0]
@@ -216,7 +209,7 @@ def main(old, new, groups=True, effects=True, attributes=True, renames=True):
                 # Initialize container for the data for each item with empty stuff besides groupID
                 dictionary[itemid] = [groupID, set(), {}]
             # Add items filtered by group
-            query = 'SELECT it.typeID, it.groupID FROM invtypes AS it INNER JOIN invgroups AS ig ON it.groupID = ig.groupID WHERE it.published = 1 AND ig.groupName IN ("Effect Beacon", "Ship Modifiers", "Mutaplasmids", "MassiveEnvironments", "Abyssal Hazards", "Non-Interactable Object")'
+            query = 'SELECT it.typeID, it.groupID FROM invtypes AS it INNER JOIN invgroups AS ig ON it.groupID = ig.groupID WHERE it.published = 1 AND ig.name IN ("Effect Beacon", "Ship Modifiers", "Mutaplasmids", "MassiveEnvironments", "Abyssal Hazards", "Non-Interactable Object")'
             cursor.execute(query)
             for row in cursor:
                 itemid = row[0]
@@ -237,18 +230,6 @@ def main(old, new, groups=True, effects=True, attributes=True, renames=True):
                         effectSet.add(effectID)
 
             if attributes:
-                # Add base attributes to our data
-                query = 'SELECT it.typeID, it.mass, it.capacity, it.volume FROM invtypes AS it'
-                cursor.execute(query)
-                for row in cursor:
-                    itemid = row[0]
-                    if itemid in dictionary:
-                        attrdict = dictionary[itemid][2]
-                        # Add base attributes: mass (4), capacity (38) and volume (161)
-                        attrdict[4] = row[1]
-                        attrdict[38] = row[2]
-                        attrdict[161] = row[3]
-
                 # Add attribute data for other attributes
                 query = 'SELECT dta.typeID, dta.attributeID, dta.value FROM dgmtypeattribs AS dta'
                 cursor.execute(query)
@@ -282,14 +263,12 @@ def main(old, new, groups=True, effects=True, attributes=True, renames=True):
             oldgroup = old_itmdata[item][0]
             groupdata = (S["unchanged"], oldgroup, None)
             # Set old set of effects and mark all as unchanged
-            effectsdata = {}
-            effectsdata[S["unchanged"]] = set()
+            effectsdata = {S["unchanged"]: set()}
             if effects:
                 oldeffects = old_itmdata[item][1]
                 effectsdata[S["unchanged"]].update(oldeffects)
             # Set old set of attributes and mark all as unchanged
-            attrdata = {}
-            attrdata[S["unchanged"]] = {}
+            attrdata = {S["unchanged"]: {}}
             if attributes:
                 oldattrs = old_itmdata[item][2]
                 for attr in oldattrs:
@@ -307,14 +286,12 @@ def main(old, new, groups=True, effects=True, attributes=True, renames=True):
             newgroup = new_itmdata[item][0]
             groupdata = (S["unchanged"], None, newgroup)
             # Set new set of effects and mark all as unchanged
-            effectsdata = {}
-            effectsdata[S["unchanged"]] = set()
+            effectsdata = {S["unchanged"]: set()}
             if effects:
                 neweffects = new_itmdata[item][1]
                 effectsdata[S["unchanged"]].update(neweffects)
             # Set new set of attributes and mark all as unchanged
-            attrdata = {}
-            attrdata[S["unchanged"]] = {}
+            attrdata = {S["unchanged"]: {}}
             if attributes:
                 newattrs = new_itmdata[item][2]
                 for attr in newattrs:
@@ -383,11 +360,11 @@ def main(old, new, groups=True, effects=True, attributes=True, renames=True):
         findrenames(ren_attributes, query)
 
         ren_categories = {}
-        query = 'SELECT categoryID, categoryName FROM invcategories'
+        query = 'SELECT categoryID, name FROM invcategories'
         findrenames(ren_categories, query)
 
         ren_groups = {}
-        query = 'SELECT groupID, groupName FROM invgroups'
+        query = 'SELECT groupID, name FROM invgroups'
         findrenames(ren_groups, query)
 
         ren_marketgroups = {}
@@ -409,6 +386,8 @@ def main(old, new, groups=True, effects=True, attributes=True, renames=True):
         new_cursor.execute(query)
         for row in new_cursor:
             new_meta[row[0]] = row[1]
+    except (KeyboardInterrupt, SystemExit):
+        raise
     except:
         pass
     # Print jobs
@@ -416,7 +395,7 @@ def main(old, new, groups=True, effects=True, attributes=True, renames=True):
 
     if renames:
         title = 'effects'
-        printrenames(ren_effects, title, implementedtag=True)
+        printrenames(ren_effects, title)
 
         title = 'attributes'
         printrenames(ren_attributes, title)
@@ -468,7 +447,7 @@ def main(old, new, groups=True, effects=True, attributes=True, renames=True):
                 for item in itemorder:
                     groupdata = items[item][0]
                     groupstr = " ({0} => {1})".format(getgroupname(groupdata[1]), getgroupname(groupdata[2])) if groupdata[0] == S["changed"] else ""
-                    print(("\n[{0}] {1}{2}".format(TG[itmstate], getitemname(item).encode('utf-8'), groupstr)))
+                    print(("\n[{0}] {3} {1}{2}".format(TG[itmstate], getitemname(item).encode('utf-8'), groupstr, item)))
 
                     effdata = items[item][1]
                     for effstate in stateorder:
@@ -481,7 +460,7 @@ def main(old, new, groups=True, effects=True, attributes=True, renames=True):
                         for eff in efforder:
                             # Take tag from item if item was added or removed
                             tag = TG[effstate] if itmstate not in (S["removed"], S["added"]) else TG[itmstate]
-                            print(("  [{0}|{1}] {2}".format(tag, "y" if geteffst(geteffectname(eff)) else "n", geteffectname(eff))))
+                            print(("  [{0}|{1}] {2}".format(tag, "y" if geteffst(eff) else "n", geteffectname(eff))))
 
                     attrdata = items[item][2]
                     for attrstate in stateorder:

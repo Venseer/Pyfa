@@ -27,12 +27,12 @@ from sqlalchemy.orm import validates, reconstructor
 import eos
 import eos.db
 import eos.config
-from eos.effectHandlerHelpers import HandledItem, HandledImplantBoosterList
+from eos.effectHandlerHelpers import HandledItem, HandledImplantList
 
 pyfalog = Logger(__name__)
 
 
-class Character(object):
+class Character:
     __itemList = None
     __itemIDMap = None
     __itemNameMap = None
@@ -51,7 +51,7 @@ class Character(object):
             for item in self.getSkillList():
                 self.addSkill(Skill(self, item.ID, self.defaultLevel))
 
-        self.__implants = HandledImplantBoosterList()
+        self.__implants = HandledImplantList()
 
     @reconstructor
     def init(self):
@@ -96,7 +96,7 @@ class Character(object):
         if cls.__itemNameMap is None:
             map = {}
             for skill in cls.getSkillList():
-                map[skill.name] = skill
+                map[skill.typeName] = skill
 
             cls.__itemNameMap = map
 
@@ -422,7 +422,7 @@ class Skill(HandledItem):
                     (not fit.isStructure or effect.isType("structure")) and \
                     effect.activeByDefault:
                 try:
-                    effect.handler(fit, self, ("skill",))
+                    effect.handler(fit, self, ("skill",), None, effect=effect)
                 except AttributeError:
                     continue
 

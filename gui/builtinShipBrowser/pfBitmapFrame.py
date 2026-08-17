@@ -3,8 +3,9 @@ import wx
 
 class PFBitmapFrame(wx.Frame):
     def __init__(self, parent, pos, bitmap):
-        wx.Frame.__init__(self, parent, id=wx.ID_ANY, title=wx.EmptyString, pos=pos, size=wx.DefaultSize,
-                          style=wx.NO_BORDER | wx.FRAME_NO_TASKBAR | wx.STAY_ON_TOP)
+        super().__init__(
+            parent, id=wx.ID_ANY, title=wx.EmptyString, pos=pos, size=wx.DefaultSize,
+            style=wx.NO_BORDER | wx.FRAME_NO_TASKBAR | wx.STAY_ON_TOP)
         img = bitmap.ConvertToImage()
         img = img.ConvertToGreyscale()
         bitmap = wx.Bitmap(img)
@@ -32,14 +33,14 @@ class PFBitmapFrame(wx.Frame):
         if self.transp < 0:
             self.transp = 0
             self.timer.Stop()
-            wx.Frame.Show(self, False)
+            super().Show(False)
             self.Destroy()
             return
         self.SetTransparent(self.transp)
 
     def Show(self, showWnd=True):
         if showWnd:
-            wx.Frame.Show(self, showWnd)
+            super().Show(showWnd)
             self.Parent.SetFocus()
             self.direction = 1
             self.timer.Start(5)
@@ -54,7 +55,7 @@ class PFBitmapFrame(wx.Frame):
         # todo: evaluate wx.DragImage, might make this class obsolete, however might also lose our customizations
         # (like the sexy fade-in animation)
         rect = self.GetRect()
-        canvas = wx.Bitmap(rect.width, rect.height)
+        canvas = wx.Bitmap(round(rect.width), round(rect.height))
         # todo: convert to context manager after updating to wxPython >v4.0.1 (4.0.1 has a bug, see #1421)
         # See #1418 for discussion
         mdc = wx.BufferedPaintDC(self)
@@ -62,4 +63,4 @@ class PFBitmapFrame(wx.Frame):
         mdc.DrawBitmap(self.bitmap, 0, 0)
         mdc.SetPen(wx.Pen("#000000", width=1))
         mdc.SetBrush(wx.TRANSPARENT_BRUSH)
-        mdc.DrawRectangle(0, 0, rect.width, rect.height)
+        mdc.DrawRectangle(0, 0, round(rect.width), round(rect.height))

@@ -17,18 +17,23 @@
 # along with pyfa.  If not, see <http://www.gnu.org/licenses/>.
 # =============================================================================
 
+
+import traceback
+
 # noinspection PyPackageRequirements
 import wx
-from gui.bitmap_loader import BitmapLoader
-
+import roman
 from logbook import Logger
 
+import config
 import gui.globalEvents as GE
 import gui.mainFrame
+from gui.bitmap_loader import BitmapLoader
+from gui.utils.clipboard import toClipboard
 from service.character import Character
 from service.fit import Fit
-from gui.utils.clipboard import toClipboard
 
+_t = wx.GetTranslation
 pyfalog = Logger(__name__)
 
 
@@ -40,7 +45,7 @@ class CharacterSelection(wx.Panel):
         mainSizer = wx.BoxSizer(wx.HORIZONTAL)
         self.SetSizer(mainSizer)
 
-        mainSizer.Add(wx.StaticText(self, wx.ID_ANY, "Character: "), 0, wx.CENTER | wx.RIGHT | wx.LEFT, 3)
+        mainSizer.Add(wx.StaticText(self, wx.ID_ANY, _t("Character: ")), 0, wx.CENTER | wx.RIGHT | wx.LEFT, 3)
 
         # cache current selection to fall back in case we choose to open char editor
         self.charCache = None
@@ -61,7 +66,7 @@ class CharacterSelection(wx.Panel):
 
         self.btnRefresh.SetMinSize(size)
         self.btnRefresh.SetMaxSize(size)
-        self.btnRefresh.SetToolTip("Refresh API")
+        self.btnRefresh.SetToolTip(_t("Refresh Skills"))
 
         self.btnRefresh.Bind(wx.EVT_BUTTON, self.refreshApi)
         self.btnRefresh.Enable(False)
@@ -95,11 +100,17 @@ class CharacterSelection(wx.Panel):
 
         menu = wx.Menu()
 
-        grantItem = menu.Append(wx.ID_ANY, "Grant Missing Skills")
+        grantItem = menu.Append(wx.ID_ANY, _t("Grant Missing Skills"))
         self.Bind(wx.EVT_MENU, self.grantMissingSkills, grantItem)
 
-        exportItem = menu.Append(wx.ID_ANY, "Copy Missing Skills")
+        exportItem = menu.Append(wx.ID_ANY, _t("Copy Missing Skills"))
         self.Bind(wx.EVT_MENU, self.exportSkills, exportItem)
+
+        exportItem = menu.Append(wx.ID_ANY, _t("Copy Missing Skills (condensed)"))
+        self.Bind(wx.EVT_MENU, self.exportSkillsCondensed, exportItem)
+
+        exportItem = menu.Append(wx.ID_ANY, _t("Copy Missing Skills (EVEMon)"))
+        self.Bind(wx.EVT_MENU, self.exportSkillsEveMon, exportItem)
 
         self.PopupMenu(menu, pos)
 
@@ -118,7 +129,7 @@ class CharacterSelection(wx.Panel):
 
     def getActiveCharacter(self):
         selection = self.charChoice.GetCurrentSelection()
-        return self.charChoice.GetClientData(selection) if selection is not -1 else None
+        return self.charChoice.GetClientData(selection) if selection != -1 else None
 
     def refreshCharacterList(self, event=None):
         choice = self.charChoice
@@ -143,7 +154,7 @@ class CharacterSelection(wx.Panel):
             sFit = Fit.getInstance()
             sFit.changeChar(fitID, charID)
 
-        choice.Append("\u2015 Open Character Editor \u2015", -1)
+        choice.Append("\u2015 " + _t("Open Character Editor") + " \u2015", -1)
         self.charCache = self.charChoice.GetCurrentSelection()
 
         if event is not None:
@@ -159,13 +170,9 @@ class CharacterSelection(wx.Panel):
         if e is None:
             self.refreshCharacterList()
         else:
-            exc_type, exc_obj, exc_trace = e
-            pyfalog.warn("Error fetching skill information for character")
-            pyfalog.warn(exc_obj)
-
-            wx.MessageBox(
-                "Error fetching skill information",
-                "Error", wx.ICON_ERROR | wx.STAY_ON_TOP)
+            from gui.characterEditor import SkillFetchExceptionHandler
+            pyfalog.warn("Error fetching skill information for character for refreshAPICallback")
+            SkillFetchExceptionHandler(e)
 
     def charChanged(self, event):
         fitID = self.mainFrame.getActiveFit()
@@ -174,7 +181,7 @@ class CharacterSelection(wx.Panel):
         if charID == -1:
             # revert to previous character
             self.charChoice.SetSelection(self.charCache)
-            self.mainFrame.showCharacterEditor(event)
+            self.mainFrame.OnShowCharacterEditor(event)
             return
 
         self.toggleRefreshButton()
@@ -182,7 +189,7 @@ class CharacterSelection(wx.Panel):
         sFit = Fit.getInstance()
         sFit.changeChar(fitID, charID)
         self.charCache = self.charChoice.GetCurrentSelection()
-        wx.PostEvent(self.mainFrame, GE.FitChanged(fitID=fitID))
+        wx.PostEvent(self.mainFrame, GE.FitChanged(fitIDs=(fitID,)))
 
     def toggleRefreshButton(self):
         charID = self.getActiveCharacter()
@@ -208,16 +215,20 @@ class CharacterSelection(wx.Panel):
         """
         When fit is changed, or new fit is selected
         """
-        self.charChoice.Enable(event.fitID is not None)
+        event.Skip()
+        activeFitID = self.mainFrame.getActiveFit()
+        if activeFitID is not None and activeFitID not in event.fitIDs:
+            return
+        self.charChoice.Enable(activeFitID is not None)
         choice = self.charChoice
         sFit = Fit.getInstance()
         currCharID = choice.GetClientData(choice.GetCurrentSelection())
-        fit = sFit.getFit(event.fitID)
+        fit = sFit.getFit(activeFitID)
         newCharID = fit.character.ID if fit is not None else None
 
-        if event.fitID is None:
+        if activeFitID is None:
             self.skillReqsStaticBitmap.SetBitmap(self.cleanSkills)
-            self.skillReqsStaticBitmap.SetToolTip("No active fit")
+            self.skillReqsStaticBitmap.SetToolTip(_t("No active fit"))
         else:
             sCharacter = Character.getInstance()
             self.reqs = sCharacter.checkRequirements(fit)
@@ -225,11 +236,11 @@ class CharacterSelection(wx.Panel):
             sCharacter.skillReqsDict = {'charname': fit.character.name, 'skills': []}
             if len(self.reqs) == 0:
                 self.needsSkills = False
-                tip = "All skill prerequisites have been met"
+                tip = _t("All skill prerequisites have been met")
                 self.skillReqsStaticBitmap.SetBitmap(self.greenSkills)
             else:
                 self.needsSkills = True
-                tip = "Skills required:\n"
+                tip = _t("Skills required:") + "\n"
                 condensed = sFit.serviceFittingOptions["compactSkills"]
                 if condensed:
                     dict_ = self._buildSkillsTooltipCondensed(self.reqs, skillsMap={})
@@ -251,14 +262,30 @@ class CharacterSelection(wx.Panel):
 
         self.toggleRefreshButton()
 
-        event.Skip()
-
     def exportSkills(self, evt):
         skillsMap = self._buildSkillsTooltipCondensed(self.reqs, skillsMap={})
 
         list = ""
         for key in sorted(skillsMap):
             list += "%s %d\n" % (key, skillsMap[key][0])
+
+        toClipboard(list)
+
+    def exportSkillsCondensed(self, evt):
+        skillsMap = self._buildSkillsTooltipSuperCondensed(self.reqs, skillsMap={})
+
+        list = ""
+        for key in sorted(skillsMap):
+            list += "%s %d\n" % (key, skillsMap[key][0])
+
+        toClipboard(list)
+
+    def exportSkillsEveMon(self, evt):
+        skillsMap = self._buildSkillsTooltipCondensed(self.reqs, skillsMap={})
+
+        list = ""
+        for key in sorted(skillsMap):
+            list += "%s %s\n" % (key, roman.toRoman(skillsMap[key][0]))
 
         toClipboard(list)
 
@@ -295,7 +322,6 @@ class CharacterSelection(wx.Panel):
         if tabulationLevel == 0:
             for item, subReqs in reqs.items():
                 skillsMap = self._buildSkillsTooltipCondensed(subReqs, item.name, 1, skillsMap)
-            sorted(skillsMap, key=skillsMap.get)
         else:
             for name, info in reqs.items():
                 level, ID, more = info
@@ -315,3 +341,25 @@ class CharacterSelection(wx.Panel):
                 skillsMap = self._buildSkillsTooltipCondensed(more, currItem, tabulationLevel + 1, skillsMap)
 
         return skillsMap
+
+    def _buildSkillsTooltipSuperCondensed(self, reqs, currItem="", tabulationLevel=0, skillsMap=None):
+        allReqs = {}
+        implicitReqs = {}
+
+        def traverseReqs(itemReqs, topLevel=True):
+            for skillName, (skillLevel, skillTypeID, subReqs) in itemReqs.items():
+                if (skillTypeID, skillName) not in allReqs or allReqs[(skillTypeID, skillName)] < skillLevel:
+                    allReqs[(skillTypeID, skillName)] = skillLevel
+                if not topLevel and (skillTypeID not in implicitReqs or implicitReqs[skillTypeID] < skillLevel):
+                    implicitReqs[skillTypeID] = skillLevel
+                traverseReqs(subReqs, topLevel=False)
+
+        for item, itemReqs in reqs.items():
+            traverseReqs(itemReqs)
+
+        newReqs = {}
+        for (skillTypeID, skillName), skillLevel in allReqs.items():
+            if skillTypeID not in implicitReqs or implicitReqs[skillTypeID] < skillLevel:
+                newReqs[skillName] = skillLevel, skillTypeID
+
+        return newReqs

@@ -80,7 +80,7 @@ class LoadAnimation(wx.Window):
                 bh = rect.height
                 y = 0
 
-            dc.DrawRectangle(x, y, barWidth, bh)
+            dc.DrawRectangle(round(x), round(y), round(barWidth), round(bh))
             x += barWidth
 
         textColor = wx.SystemSettings.GetColour(wx.SYS_COLOUR_WINDOWTEXT)
@@ -89,9 +89,9 @@ class LoadAnimation(wx.Window):
 
 
 class WaitDialog(wx.Dialog):
+
     def __init__(self, parent, title="Processing"):
-        wx.Dialog.__init__(self, parent, id=wx.ID_ANY, title=title, size=(300, 30),
-                           style=wx.NO_BORDER)
+        super().__init__(parent, id=wx.ID_ANY, title=title, size=(300, 30), style=wx.NO_BORDER)
         mainSizer = wx.BoxSizer(wx.HORIZONTAL)
 
         self.progress = LoadAnimation(self, label=title, size=(300, 30))
